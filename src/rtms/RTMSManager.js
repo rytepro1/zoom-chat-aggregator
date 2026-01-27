@@ -16,7 +16,7 @@ export class RTMSManager {
   /**
    * Connect to a meeting's RTMS stream
    */
-  async connect(meetingId, streamUrl, roomName) {
+  async connect(meetingId, streamUrl, roomName, roomColor = '#ef4444') {
     if (this.connections.has(meetingId)) {
       console.log(`Already connected to meeting: ${meetingId}`);
       return;
@@ -28,13 +28,14 @@ export class RTMSManager {
       const connection = {
         id: meetingId,
         roomName,
+        roomColor,
         mock: true,
         connectedAt: new Date(),
         mockInterval: null
       };
 
       // Start simulating chat messages for demo purposes
-      connection.mockInterval = this.startMockMessages(meetingId, roomName);
+      connection.mockInterval = this.startMockMessages(meetingId, roomName, roomColor);
 
       this.connections.set(meetingId, connection);
       return;
@@ -124,7 +125,7 @@ export class RTMSManager {
   /**
    * Start sending mock messages for demo/testing
    */
-  startMockMessages(meetingId, roomName) {
+  startMockMessages(meetingId, roomName, roomColor = '#ef4444') {
     const sampleNames = [
       'Sarah Johnson', 'Mike Chen', 'Emily Davis', 'James Wilson',
       'Maria Garcia', 'David Kim', 'Lisa Thompson', 'Robert Brown',
@@ -165,6 +166,7 @@ export class RTMSManager {
         sender,
         content,
         room: roomName,
+        roomColor,
         meetingId,
         timestamp: new Date().toISOString(),
         type: 'chat'
@@ -177,6 +179,7 @@ export class RTMSManager {
         sender: 'System',
         content: `Connected to ${roomName} (Mock Mode - Demo messages will appear)`,
         room: roomName,
+        roomColor,
         meetingId,
         timestamp: new Date().toISOString(),
         type: 'system'
@@ -229,6 +232,7 @@ export class RTMSManager {
     return Array.from(this.connections.values()).map(conn => ({
       meetingId: conn.id,
       roomName: conn.roomName,
+      roomColor: conn.roomColor,
       connectedAt: conn.connectedAt,
       isMock: conn.mock || false
     }));

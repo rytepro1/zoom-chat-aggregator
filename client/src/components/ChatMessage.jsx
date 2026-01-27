@@ -35,7 +35,8 @@ function formatTime(timestamp) {
 
 function ChatMessage({ message }) {
   const { settings } = useSettings();
-  const roomColor = getRoomColor(message.room);
+  // Use custom roomColor if provided, otherwise fall back to generated color
+  const roomColor = message.roomColor || getRoomColor(message.room);
 
   const spacingClasses = {
     compact: 'p-2',

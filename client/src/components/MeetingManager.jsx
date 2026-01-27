@@ -1,10 +1,32 @@
 import React, { useState } from 'react';
 import { useMeetings } from '../contexts/MeetingsContext';
 
+// Preset color options for rooms
+const ROOM_COLORS = [
+  { name: 'Red', value: '#ef4444' },
+  { name: 'Orange', value: '#f97316' },
+  { name: 'Amber', value: '#f59e0b' },
+  { name: 'Yellow', value: '#eab308' },
+  { name: 'Lime', value: '#84cc16' },
+  { name: 'Green', value: '#22c55e' },
+  { name: 'Emerald', value: '#10b981' },
+  { name: 'Teal', value: '#14b8a6' },
+  { name: 'Cyan', value: '#06b6d4' },
+  { name: 'Sky', value: '#0ea5e9' },
+  { name: 'Blue', value: '#3b82f6' },
+  { name: 'Indigo', value: '#6366f1' },
+  { name: 'Violet', value: '#8b5cf6' },
+  { name: 'Purple', value: '#a855f7' },
+  { name: 'Fuchsia', value: '#d946ef' },
+  { name: 'Pink', value: '#ec4899' },
+  { name: 'Rose', value: '#f43f5e' },
+];
+
 function MeetingManager() {
   const [meetingId, setMeetingId] = useState('');
   const [passcode, setPasscode] = useState('');
   const [roomName, setRoomName] = useState('');
+  const [roomColor, setRoomColor] = useState(ROOM_COLORS[0].value);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState('');
 
@@ -25,13 +47,17 @@ function MeetingManager() {
       await connectToMeeting({
         meetingId: meetingId.trim().replace(/\s/g, ''),
         passcode: passcode.trim(),
-        roomName: roomName.trim() || `Meeting ${meetingId}`
+        roomName: roomName.trim() || `Meeting ${meetingId}`,
+        roomColor: roomColor
       });
 
-      // Clear form on success
+      // Clear form on success and pick next color
       setMeetingId('');
       setPasscode('');
       setRoomName('');
+      // Rotate to next color for convenience
+      const currentIndex = ROOM_COLORS.findIndex(c => c.value === roomColor);
+      setRoomColor(ROOM_COLORS[(currentIndex + 1) % ROOM_COLORS.length].value);
     } catch (err) {
       setError(err.message || 'Failed to connect to meeting');
     } finally {
@@ -100,6 +126,28 @@ function MeetingManager() {
           />
         </div>
 
+        <div>
+          <label className="block text-sm mb-1 opacity-70">
+            Badge Color
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {ROOM_COLORS.map((color) => (
+              <button
+                key={color.value}
+                type="button"
+                onClick={() => setRoomColor(color.value)}
+                className={`w-6 h-6 rounded-full transition-all ${
+                  roomColor === color.value
+                    ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-800 scale-110'
+                    : 'hover:scale-110'
+                }`}
+                style={{ backgroundColor: color.value }}
+                title={color.name}
+              />
+            ))}
+          </div>
+        </div>
+
         {error && (
           <div className="text-red-400 text-sm py-2 px-3 bg-red-500/10 rounded-lg">
             {error}
@@ -155,17 +203,23 @@ function MeetingManager() {
                 key={meeting.id}
                 className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10"
               >
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">
-                    {meeting.roomName}
-                  </div>
-                  <div className="text-xs opacity-50">
-                    ID: {meeting.meetingId}
-                    {meeting.isMock && (
-                      <span className="ml-2 px-1.5 py-0.5 bg-yellow-500/20 text-yellow-400 rounded text-[10px]">
-                        MOCK
-                      </span>
-                    )}
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span
+                    className="w-3 h-3 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: meeting.roomColor || '#ef4444' }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">
+                      {meeting.roomName}
+                    </div>
+                    <div className="text-xs opacity-50">
+                      ID: {meeting.meetingId}
+                      {meeting.isMock && (
+                        <span className="ml-2 px-1.5 py-0.5 bg-yellow-500/20 text-yellow-400 rounded text-[10px]">
+                          MOCK
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

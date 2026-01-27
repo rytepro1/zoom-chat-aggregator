@@ -58,11 +58,11 @@ export function MeetingsProvider({ children, socket }) {
     }
   };
 
-  const connectToMeeting = useCallback(async ({ meetingId, passcode, roomName }) => {
+  const connectToMeeting = useCallback(async ({ meetingId, passcode, roomName, roomColor }) => {
     const response = await fetch(`${API_URL}/api/meetings/connect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ meetingId, passcode, roomName })
+      body: JSON.stringify({ meetingId, passcode, roomName, roomColor })
     });
 
     const data = await response.json();
@@ -76,6 +76,7 @@ export function MeetingsProvider({ children, socket }) {
       id: data.id || meetingId,
       meetingId,
       roomName,
+      roomColor,
       status: 'connecting',
       isMock: data.isMock || false
     }]);

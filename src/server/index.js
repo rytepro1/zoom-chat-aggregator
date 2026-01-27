@@ -84,7 +84,7 @@ app.get('/api/meetings', (req, res) => {
 
 // Connect to a meeting
 app.post('/api/meetings/connect', async (req, res) => {
-  const { meetingId, passcode, roomName } = req.body;
+  const { meetingId, passcode, roomName, roomColor } = req.body;
 
   if (!meetingId) {
     return res.status(400).json({ error: 'Meeting ID is required' });
@@ -92,15 +92,18 @@ app.post('/api/meetings/connect', async (req, res) => {
 
   // Clean up meeting ID (remove spaces and dashes)
   const cleanMeetingId = meetingId.replace(/[\s-]/g, '');
+  const finalRoomName = roomName || `Meeting ${cleanMeetingId}`;
+  const finalRoomColor = roomColor || '#ef4444';
 
   try {
     // Connect via RTMS manager (will use mock mode if RTMS not available)
-    await rtmsManager.connect(cleanMeetingId, null, roomName || `Meeting ${cleanMeetingId}`);
+    await rtmsManager.connect(cleanMeetingId, null, finalRoomName, finalRoomColor);
 
     // Add room to message aggregator
     messageAggregator.addRoom({
       id: cleanMeetingId,
-      name: roomName || `Meeting ${cleanMeetingId}`,
+      name: finalRoomName,
+      color: finalRoomColor,
       participantCount: 0
     });
 
@@ -108,7 +111,8 @@ app.post('/api/meetings/connect', async (req, res) => {
     io.emit('meetingConnected', {
       id: cleanMeetingId,
       meetingId: cleanMeetingId,
-      roomName: roomName || `Meeting ${cleanMeetingId}`,
+      roomName: finalRoomName,
+      roomColor: finalRoomColor,
       status: 'connected',
       isMock: rtmsManager.useMockMode
     });

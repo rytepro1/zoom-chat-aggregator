@@ -21,6 +21,7 @@ export class MessageAggregator {
       sender: messageData.sender || 'Unknown',
       content: messageData.content || '',
       room: messageData.room || 'Unknown Room',
+      roomColor: messageData.roomColor || '#ef4444',
       meetingId: messageData.meetingId || null,
       timestamp: messageData.timestamp || new Date().toISOString(),
       type: messageData.type || 'chat'
