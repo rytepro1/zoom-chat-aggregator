@@ -75,19 +75,59 @@ function ChatFeed({ messages, selectedRoom }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Auto-scroll indicator */}
-      {!autoScroll && (
+      {/* Auto-scroll controls */}
+      <div className="absolute bottom-4 right-4 flex items-center gap-2">
+        {/* Pause/Play button */}
         <button
           onClick={() => {
-            setAutoScroll(true);
-            bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+            if (autoScroll) {
+              setAutoScroll(false);
+            } else {
+              setAutoScroll(true);
+              if (containerRef.current) {
+                containerRef.current.scrollTo({
+                  top: containerRef.current.scrollHeight,
+                  behavior: 'smooth'
+                });
+              }
+            }
           }}
-          className="absolute bottom-4 right-4 text-white px-4 py-2 rounded-full shadow-lg transition-colors hover:opacity-90"
-          style={{ backgroundColor: 'var(--accent-color)' }}
+          className="text-white p-3 rounded-full shadow-lg transition-all hover:scale-105"
+          style={{ backgroundColor: autoScroll ? 'var(--accent-color)' : '#ef4444' }}
+          title={autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
         >
-          ↓ New messages
+          {autoScroll ? (
+            // Pause icon
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+            </svg>
+          ) : (
+            // Play icon
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          )}
         </button>
-      )}
+
+        {/* New messages indicator when paused */}
+        {!autoScroll && (
+          <button
+            onClick={() => {
+              setAutoScroll(true);
+              if (containerRef.current) {
+                containerRef.current.scrollTo({
+                  top: containerRef.current.scrollHeight,
+                  behavior: 'smooth'
+                });
+              }
+            }}
+            className="text-white px-4 py-2 rounded-full shadow-lg transition-colors hover:opacity-90"
+            style={{ backgroundColor: 'var(--accent-color)' }}
+          >
+            ↓ New messages
+          </button>
+        )}
+      </div>
     </div>
   );
 }

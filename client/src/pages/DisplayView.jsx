@@ -11,6 +11,7 @@ function DisplayViewContent() {
   const [messages, setMessages] = useState([]);
   const [connected, setConnected] = useState(false);
   const [stats, setStats] = useState({ totalMessages: 0, activeRooms: 0 });
+  const [autoScroll, setAutoScroll] = useState(true);
   const containerRef = useRef(null);
   const { settings } = useSettings();
 
@@ -51,13 +52,23 @@ function DisplayViewContent() {
 
   // Auto-scroll
   useEffect(() => {
-    if (containerRef.current) {
+    if (autoScroll && containerRef.current) {
       containerRef.current.scrollTo({
         top: containerRef.current.scrollHeight,
         behavior: settings.animationsEnabled ? 'smooth' : 'auto'
       });
     }
-  }, [messages, settings.animationsEnabled]);
+  }, [messages, autoScroll, settings.animationsEnabled]);
+
+  // Detect manual scroll
+  const handleScroll = () => {
+    if (!containerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+    if (!isAtBottom && autoScroll) {
+      setAutoScroll(false);
+    }
+  };
 
   return (
     <div
@@ -99,7 +110,8 @@ function DisplayViewContent() {
       {/* Full-screen chat feed */}
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto p-6"
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-6 relative"
       >
         {messages.length === 0 ? (
           <div
@@ -120,6 +132,56 @@ function DisplayViewContent() {
             ))}
           </div>
         )}
+
+        {/* Auto-scroll controls */}
+        <div className="fixed bottom-6 right-6 flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (autoScroll) {
+                setAutoScroll(false);
+              } else {
+                setAutoScroll(true);
+                if (containerRef.current) {
+                  containerRef.current.scrollTo({
+                    top: containerRef.current.scrollHeight,
+                    behavior: 'smooth'
+                  });
+                }
+              }
+            }}
+            className="text-white p-4 rounded-full shadow-lg transition-all hover:scale-105"
+            style={{ backgroundColor: autoScroll ? 'var(--accent-color)' : '#ef4444' }}
+            title={autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
+          >
+            {autoScroll ? (
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+              </svg>
+            ) : (
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            )}
+          </button>
+
+          {!autoScroll && (
+            <button
+              onClick={() => {
+                setAutoScroll(true);
+                if (containerRef.current) {
+                  containerRef.current.scrollTo({
+                    top: containerRef.current.scrollHeight,
+                    behavior: 'smooth'
+                  });
+                }
+              }}
+              className="text-white px-4 py-3 rounded-full shadow-lg transition-colors hover:opacity-90"
+              style={{ backgroundColor: 'var(--accent-color)' }}
+            >
+              ↓ New messages
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
