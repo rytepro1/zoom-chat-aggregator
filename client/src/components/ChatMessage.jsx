@@ -174,21 +174,21 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
 
       {/* Action buttons - always visible on moderator view */}
       {showActions && moderation && (
-        <div className="flex items-center gap-1 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0">
           {/* Highlight button */}
           <button
             onClick={(e) => {
               e.stopPropagation();
               moderation.toggleHighlight(message);
             }}
-            className={`p-1.5 rounded transition-colors ${
+            className={`p-3 rounded-lg transition-colors ${
               isHighlighted
                 ? 'bg-yellow-400 text-gray-900'
-                : 'text-gray-500 hover:text-yellow-400 hover:bg-white/10'
+                : 'text-gray-400 hover:text-yellow-400 hover:bg-yellow-400/20'
             }`}
             title={isHighlighted ? 'Remove Highlight' : 'Highlight'}
           >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
             </svg>
           </button>
@@ -203,14 +203,14 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
                 moderation.addToQueue(message);
               }
             }}
-            className={`p-1.5 rounded transition-colors ${
+            className={`p-3 rounded-lg transition-colors ${
               isQueued
                 ? 'bg-blue-500 text-white'
-                : 'text-gray-500 hover:text-blue-400 hover:bg-white/10'
+                : 'text-gray-400 hover:text-blue-400 hover:bg-blue-400/20'
             }`}
             title={isQueued ? 'Remove from Queue' : 'Add to Queue'}
           >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
               <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z"/>
             </svg>
           </button>
@@ -221,10 +221,10 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
               e.stopPropagation();
               moderation.featureMessage(message);
             }}
-            className="p-1.5 rounded text-gray-500 hover:text-green-400 hover:bg-white/10 transition-colors"
+            className="p-3 rounded-lg text-gray-400 hover:text-green-400 hover:bg-green-400/20 transition-colors"
             title="Feature Now"
           >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
             </svg>
           </button>
