@@ -10,10 +10,16 @@ function ChatFeed({ messages, selectedRoom }) {
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    if (autoScroll && bottomRef.current) {
-      bottomRef.current.scrollIntoView({
-        behavior: settings.animationsEnabled ? 'smooth' : 'auto'
-      });
+    if (autoScroll && containerRef.current) {
+      const container = containerRef.current;
+      if (settings.animationsEnabled) {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: 'smooth'
+        });
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
     }
   }, [messages, autoScroll, settings.animationsEnabled]);
 

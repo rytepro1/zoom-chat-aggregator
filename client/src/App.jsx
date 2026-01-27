@@ -23,7 +23,7 @@ function App() {
 
   return (
     <div
-      className="min-h-screen flex flex-col transition-colors duration-300"
+      className="h-screen flex flex-col overflow-hidden transition-colors duration-300"
       style={{
         backgroundColor: 'var(--bg-color)',
         color: 'var(--text-color)',
