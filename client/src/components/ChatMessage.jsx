@@ -44,7 +44,7 @@ function formatTime(timestamp) {
   });
 }
 
-function ChatMessage({ message, showActions = true, onFeature, moderation: moderationProp }) {
+function ChatMessage({ message, showActions = true, onFeature, moderation: moderationProp, displayMode = false }) {
   const { settings } = useSettings();
   const moderationFromContext = useModerationSafe();
   const moderation = moderationProp || moderationFromContext;
@@ -63,10 +63,52 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
   };
 
   const handleClick = () => {
-    if (showActions && moderation) {
+    if (showActions && moderation && !displayMode) {
       setShowMenu(!showMenu);
     }
   };
+
+  // Display mode: cleaner, larger text for video walls
+  if (displayMode) {
+    return (
+      <div
+        className="flex items-start gap-4 py-4 px-2"
+        style={{
+          borderLeft: `4px solid ${roomColor}`,
+          marginBottom: '8px',
+        }}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-3 mb-1">
+            <span
+              className="font-bold text-xl"
+              style={{ color: 'var(--text-color)' }}
+            >
+              {message.sender}
+            </span>
+            <span
+              className="text-sm px-2 py-0.5 rounded"
+              style={{
+                backgroundColor: roomColor,
+                color: 'white',
+              }}
+            >
+              {message.room}
+            </span>
+          </div>
+          <p
+            className="text-xl leading-relaxed"
+            style={{
+              color: 'var(--text-color)',
+              opacity: 0.95,
+            }}
+          >
+            {message.content}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

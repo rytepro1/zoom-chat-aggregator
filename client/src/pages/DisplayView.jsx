@@ -11,44 +11,28 @@ const SOCKET_URL = import.meta.env.DEV
 function DisplayViewContent({ socket }) {
   const [messages, setMessages] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [stats, setStats] = useState({ totalMessages: 0, activeRooms: 0 });
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showControls, setShowControls] = useState(false);
   const containerRef = useRef(null);
+  const hideControlsTimeout = useRef(null);
   const { settings } = useSettings();
   const { featuredMessage } = useModeration();
 
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('connect', () => {
-      setConnected(true);
-    });
-
-    socket.on('disconnect', () => {
-      setConnected(false);
-    });
+    socket.on('connect', () => setConnected(true));
+    socket.on('disconnect', () => setConnected(false));
 
     socket.on('initialState', (data) => {
       setMessages(data.messages || []);
-      setStats(data.stats || { totalMessages: 0, activeRooms: 0 });
     });
 
     socket.on('newMessage', (message) => {
       setMessages(prev => [...prev, message].slice(-500));
-      setStats(prev => ({
-        ...prev,
-        totalMessages: prev.totalMessages + 1
-      }));
     });
 
-    socket.on('stats', (data) => {
-      setStats(data.stats);
-    });
-
-    // Set connected if already connected
-    if (socket.connected) {
-      setConnected(true);
-    }
+    if (socket.connected) setConnected(true);
   }, [socket]);
 
   // Auto-scroll
@@ -71,65 +55,66 @@ function DisplayViewContent({ socket }) {
     }
   };
 
+  // Show controls on mouse move, hide after delay
+  const handleMouseMove = () => {
+    setShowControls(true);
+    if (hideControlsTimeout.current) {
+      clearTimeout(hideControlsTimeout.current);
+    }
+    hideControlsTimeout.current = setTimeout(() => {
+      setShowControls(false);
+    }, 3000);
+  };
+
+  // Keyboard shortcut: Space to toggle pause
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setAutoScroll(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   return (
     <div
-      className="h-screen flex flex-col overflow-hidden"
+      className="h-screen w-screen overflow-hidden cursor-none"
       style={{
         backgroundColor: 'var(--bg-color)',
         color: 'var(--text-color)',
         fontFamily: 'var(--font-family)',
         fontSize: 'var(--base-font-size)',
       }}
+      onMouseMove={handleMouseMove}
     >
-      {/* Minimal header */}
-      <div
-        className="flex items-center justify-between px-6 py-3 border-b border-white/10"
-        style={{ backgroundColor: 'var(--header-color)' }}
-      >
-        <div className="flex items-center gap-3">
-          {settings.logoUrl && (
-            <img src={settings.logoUrl} alt="Logo" className="h-8 w-auto" />
-          )}
-          <h1
-            className="text-xl font-bold"
-            style={{ color: 'var(--accent-color)' }}
-          >
-            {settings.appTitle}
-          </h1>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          <span className="flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
-            {connected ? 'Live' : 'Disconnected'}
-          </span>
-          <span style={{ color: 'var(--secondary-text-color)' }}>
-            {stats.activeRooms} rooms • {messages.length} messages
-          </span>
-        </div>
-      </div>
-
-      {/* Featured Message Banner */}
+      {/* Featured Message - Floating at top */}
       {featuredMessage && (
-        <div
-          className="mx-6 mt-4 p-6 rounded-xl shadow-2xl animate-pulse"
-          style={{
-            backgroundColor: featuredMessage.roomColor || 'var(--accent-color)',
-            animation: 'none'
-          }}
-        >
-          <div className="flex items-start gap-4">
-            <div className="flex-shrink-0">
-              <svg className="w-10 h-10 text-white/80" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h2v-6h-2v6zm0-8h2V7h-2v2z"/>
-              </svg>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white/80 text-sm font-medium mb-1">
-                {featuredMessage.sender} • {featuredMessage.room}
-              </p>
-              <p className="text-white text-2xl font-semibold break-words">
-                {featuredMessage.content}
-              </p>
+        <div className="fixed top-0 left-0 right-0 z-50 p-6">
+          <div
+            className="max-w-5xl mx-auto p-8 rounded-2xl shadow-2xl backdrop-blur-sm"
+            style={{
+              backgroundColor: featuredMessage.roomColor || 'var(--accent-color)',
+              boxShadow: `0 25px 50px -12px ${featuredMessage.roomColor || 'var(--accent-color)'}66`
+            }}
+          >
+            <div className="flex items-start gap-5">
+              <div className="flex-shrink-0 w-14 h-14 rounded-full bg-white/20 flex items-center justify-center">
+                <span className="text-white text-2xl font-bold">
+                  {featuredMessage.sender?.charAt(0)?.toUpperCase() || '?'}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-white/70 text-lg font-medium mb-2">
+                  {featuredMessage.sender}
+                  <span className="mx-2 text-white/40">•</span>
+                  <span className="text-white/50">{featuredMessage.room}</span>
+                </p>
+                <p className="text-white text-3xl font-semibold leading-relaxed break-words">
+                  {featuredMessage.content}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -139,78 +124,82 @@ function DisplayViewContent({ socket }) {
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-6 relative"
+        className="h-full w-full overflow-y-auto px-8 py-6"
+        style={{
+          paddingTop: featuredMessage ? '200px' : '24px'
+        }}
       >
         {messages.length === 0 ? (
           <div
             className="flex items-center justify-center h-full"
             style={{ color: 'var(--secondary-text-color)' }}
           >
-            <div className="text-center">
-              <p className="text-2xl mb-2">Waiting for messages...</p>
-              <p className="text-sm">
-                Connect to meetings in the main window to see chat here
-              </p>
+            <div className="text-center opacity-50">
+              <div className="w-16 h-16 mx-auto mb-6 rounded-full border-4 border-current border-t-transparent animate-spin" />
+              <p className="text-2xl">Waiting for messages...</p>
             </div>
           </div>
         ) : (
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-5xl mx-auto space-y-1">
             {messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
+              <ChatMessage key={message.id} message={message} displayMode />
             ))}
           </div>
         )}
-
-        {/* Auto-scroll controls */}
-        <div className="fixed bottom-6 right-6 flex items-center gap-2">
-          <button
-            onClick={() => {
-              if (autoScroll) {
-                setAutoScroll(false);
-              } else {
-                setAutoScroll(true);
-                if (containerRef.current) {
-                  containerRef.current.scrollTo({
-                    top: containerRef.current.scrollHeight,
-                    behavior: 'smooth'
-                  });
-                }
-              }
-            }}
-            className="text-white p-4 rounded-full shadow-lg transition-all hover:scale-105"
-            style={{ backgroundColor: autoScroll ? 'var(--accent-color)' : '#ef4444' }}
-            title={autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
-          >
-            {autoScroll ? (
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-              </svg>
-            ) : (
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            )}
-          </button>
-
-          {!autoScroll && (
-            <button
-              onClick={() => {
-                setAutoScroll(true);
-                if (containerRef.current) {
-                  containerRef.current.scrollTo({
-                    top: containerRef.current.scrollHeight,
-                    behavior: 'smooth'
-                  });
-                }
-              }}
-              className="text-white px-4 py-3 rounded-full shadow-lg transition-colors hover:opacity-90"
-              style={{ backgroundColor: 'var(--accent-color)' }}
-            >
-              ↓ New messages
-            </button>
-          )}
-        </div>
       </div>
+
+      {/* Minimal controls - only visible on mouse move */}
+      <div
+        className={`fixed bottom-6 right-6 flex items-center gap-3 transition-opacity duration-300 ${
+          showControls ? 'opacity-100' : 'opacity-0'
+        }`}
+        style={{ cursor: 'default' }}
+      >
+        {/* Connection indicator */}
+        <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-black/50 backdrop-blur-sm">
+          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
+          <span className="text-white/70 text-sm">
+            {connected ? 'Live' : 'Disconnected'}
+          </span>
+        </div>
+
+        {/* Pause/Play */}
+        <button
+          onClick={() => {
+            setAutoScroll(prev => {
+              if (!prev && containerRef.current) {
+                containerRef.current.scrollTo({
+                  top: containerRef.current.scrollHeight,
+                  behavior: 'smooth'
+                });
+              }
+              return !prev;
+            });
+          }}
+          className="w-12 h-12 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors"
+          title={autoScroll ? 'Pause (Space)' : 'Play (Space)'}
+          style={{ cursor: 'pointer' }}
+        >
+          {autoScroll ? (
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          )}
+        </button>
+      </div>
+
+      {/* Paused indicator - center of screen */}
+      {!autoScroll && (
+        <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
+          <div className="bg-black/60 backdrop-blur-sm px-8 py-4 rounded-2xl">
+            <span className="text-white text-xl font-medium">⏸ Paused</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
