@@ -48,7 +48,6 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
   const { settings } = useSettings();
   const moderationFromContext = useModerationSafe();
   const moderation = moderationProp || moderationFromContext;
-  const [showMenu, setShowMenu] = useState(false);
 
   // Use custom roomColor if provided, otherwise fall back to generated color
   const roomColor = message.roomColor || getRoomColor(message.room);
@@ -62,20 +61,15 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
     spacious: 'p-4',
   };
 
-  const handleClick = () => {
-    if (showActions && moderation && !displayMode) {
-      setShowMenu(!showMenu);
-    }
-  };
-
   // Display mode: cleaner, larger text for video walls
   if (displayMode) {
     return (
       <div
-        className="flex items-start gap-4 py-4 px-2"
+        className={`flex items-start gap-4 py-4 px-2 ${isHighlighted ? 'bg-yellow-400/20' : ''}`}
         style={{
-          borderLeft: `4px solid ${roomColor}`,
+          borderLeft: `4px solid ${isHighlighted ? '#facc15' : roomColor}`,
           marginBottom: '8px',
+          boxShadow: isHighlighted ? '0 0 20px rgba(250, 204, 21, 0.3)' : 'none',
         }}
       >
         <div className="flex-1 min-w-0">
@@ -95,6 +89,13 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
             >
               {message.room}
             </span>
+            {isHighlighted && (
+              <span className="text-yellow-400 animate-pulse">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                </svg>
+              </span>
+            )}
           </div>
           <p
             className="text-xl leading-relaxed"
@@ -115,13 +116,12 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
       className={`flex items-start gap-3 rounded-lg relative group ${
         settings.animationsEnabled ? 'transition-all duration-200' : ''
       } ${spacingClasses[settings.messageSpacing] || 'p-3'} ${
-        showActions ? 'cursor-pointer hover:bg-white/10' : 'hover:bg-white/5'
-      } ${isHighlighted ? 'ring-2 ring-yellow-400 bg-yellow-400/10' : ''}`}
+        isHighlighted ? 'ring-2 ring-yellow-400 bg-yellow-400/10' : ''
+      }`}
       style={{
         backgroundColor: isHighlighted ? 'rgba(250, 204, 21, 0.1)' : 'rgba(255,255,255,0.03)',
         marginBottom: 'var(--message-spacing)',
       }}
-      onClick={handleClick}
     >
       {/* Room badge */}
       {settings.showRoomBadges && (
@@ -172,78 +172,61 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
         </p>
       </div>
 
-      {/* Status indicators */}
-      {(isHighlighted || isQueued) && (
+      {/* Action buttons - always visible on moderator view */}
+      {showActions && moderation && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          {isHighlighted && (
-            <span className="text-yellow-400" title="Highlighted">
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-              </svg>
-            </span>
-          )}
-          {isQueued && (
-            <span className="text-blue-400" title="In Queue">
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z"/>
-              </svg>
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Action menu */}
-      {showMenu && showActions && moderation && (
-        <div
-          className="absolute right-2 top-full mt-1 z-50 bg-gray-800 border border-white/20 rounded-lg shadow-xl py-1 min-w-[160px]"
-          onClick={(e) => e.stopPropagation()}
-        >
+          {/* Highlight button */}
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               moderation.toggleHighlight(message);
-              setShowMenu(false);
             }}
-            className="w-full px-3 py-2 text-left text-sm hover:bg-white/10 flex items-center gap-2"
+            className={`p-1.5 rounded transition-colors ${
+              isHighlighted
+                ? 'bg-yellow-400 text-gray-900'
+                : 'text-gray-500 hover:text-yellow-400 hover:bg-white/10'
+            }`}
+            title={isHighlighted ? 'Remove Highlight' : 'Highlight'}
           >
-            <svg className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
             </svg>
-            {isHighlighted ? 'Remove Highlight' : 'Highlight'}
           </button>
+
+          {/* Queue button */}
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               if (isQueued) {
                 moderation.removeFromQueue(message.id);
               } else {
                 moderation.addToQueue(message);
               }
-              setShowMenu(false);
             }}
-            className="w-full px-3 py-2 text-left text-sm hover:bg-white/10 flex items-center gap-2"
+            className={`p-1.5 rounded transition-colors ${
+              isQueued
+                ? 'bg-blue-500 text-white'
+                : 'text-gray-500 hover:text-blue-400 hover:bg-white/10'
+            }`}
+            title={isQueued ? 'Remove from Queue' : 'Add to Queue'}
           >
-            <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z"/>
             </svg>
-            {isQueued ? 'Remove from Queue' : 'Add to Queue'}
           </button>
+
+          {/* Feature Now button */}
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               moderation.featureMessage(message);
-              setShowMenu(false);
             }}
-            className="w-full px-3 py-2 text-left text-sm hover:bg-white/10 flex items-center gap-2"
+            className="p-1.5 rounded text-gray-500 hover:text-green-400 hover:bg-white/10 transition-colors"
+            title="Feature Now"
           >
-            <svg className="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
             </svg>
-            Feature Now
-          </button>
-          <hr className="border-white/10 my-1" />
-          <button
-            onClick={() => setShowMenu(false)}
-            className="w-full px-3 py-2 text-left text-sm hover:bg-white/10 text-gray-400"
-          >
-            Cancel
           </button>
         </div>
       )}
