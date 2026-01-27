@@ -64,6 +64,27 @@ function App() {
             <div className="flex items-center gap-4">
               <StatusBar connected={connected} stats={stats} />
               <button
+                onClick={() => {
+                  window.open('/display', 'DisplayView', 'width=1920,height=1080,menubar=no,toolbar=no,location=no,status=no');
+                }}
+                className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                title="Pop out display for external screen"
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                  />
+                </svg>
+              </button>
+              <button
                 onClick={() => setSettingsPanelOpen(true)}
                 className="p-2 rounded-lg hover:bg-white/10 transition-colors"
                 title="Settings"
