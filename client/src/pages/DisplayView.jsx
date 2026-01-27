@@ -100,25 +100,45 @@ function DisplayViewContent({ socket }) {
       {featuredMessage && (
         <div className="fixed top-0 left-0 right-0 z-50 p-6">
           <div
-            className="max-w-5xl mx-auto p-8 rounded-2xl shadow-2xl backdrop-blur-sm"
+            className="max-w-5xl mx-auto p-8 rounded-2xl shadow-2xl backdrop-blur-md border"
             style={{
-              backgroundColor: featuredMessage.roomColor || 'var(--accent-color)',
-              boxShadow: `0 25px 50px -12px ${featuredMessage.roomColor || 'var(--accent-color)'}66`
+              backgroundColor: `${featuredMessage.roomColor || 'var(--accent-color)'}25`,
+              borderColor: `${featuredMessage.roomColor || 'var(--accent-color)'}50`,
+              boxShadow: `0 25px 50px -12px ${featuredMessage.roomColor || 'var(--accent-color)'}33`
             }}
           >
             <div className="flex items-start gap-5">
-              <div className="flex-shrink-0 w-14 h-14 rounded-full bg-white/20 flex items-center justify-center">
-                <span className="text-white text-2xl font-bold">
+              <div
+                className="flex-shrink-0 w-14 h-14 rounded-full flex items-center justify-center"
+                style={{
+                  backgroundColor: `${featuredMessage.roomColor || 'var(--accent-color)'}40`
+                }}
+              >
+                <span
+                  className="text-2xl font-bold"
+                  style={{ color: featuredMessage.roomColor || 'var(--accent-color)' }}
+                >
                   {featuredMessage.sender?.charAt(0)?.toUpperCase() || '?'}
                 </span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-white/70 text-lg font-medium mb-2">
+                <p className="text-lg font-medium mb-2" style={{ color: 'var(--text-color)', opacity: 0.7 }}>
                   {featuredMessage.sender}
-                  <span className="mx-2 text-white/40">•</span>
-                  <span className="text-white/50">{featuredMessage.room}</span>
+                  <span className="mx-2" style={{ opacity: 0.4 }}>•</span>
+                  <span
+                    className="text-sm px-2 py-0.5 rounded"
+                    style={{
+                      backgroundColor: `${featuredMessage.roomColor || 'var(--accent-color)'}40`,
+                      color: featuredMessage.roomColor || 'var(--accent-color)',
+                    }}
+                  >
+                    {featuredMessage.room}
+                  </span>
                 </p>
-                <p className="text-white text-3xl font-semibold leading-relaxed break-words">
+                <p
+                  className="text-3xl font-semibold leading-relaxed break-words"
+                  style={{ color: 'var(--text-color)' }}
+                >
                   {featuredMessage.content}
                 </p>
               </div>
