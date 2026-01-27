@@ -24,12 +24,19 @@ export class RTMSManager {
 
     if (this.useMockMode) {
       console.log(`[MOCK] Simulating RTMS connection for: ${roomName}`);
-      this.connections.set(meetingId, {
+
+      const connection = {
         id: meetingId,
         roomName,
         mock: true,
-        connectedAt: new Date()
-      });
+        connectedAt: new Date(),
+        mockInterval: null
+      };
+
+      // Start simulating chat messages for demo purposes
+      connection.mockInterval = this.startMockMessages(meetingId, roomName);
+
+      this.connections.set(meetingId, connection);
       return;
     }
 
@@ -115,6 +122,71 @@ export class RTMSManager {
   }
 
   /**
+   * Start sending mock messages for demo/testing
+   */
+  startMockMessages(meetingId, roomName) {
+    const sampleNames = [
+      'Sarah Johnson', 'Mike Chen', 'Emily Davis', 'James Wilson',
+      'Maria Garcia', 'David Kim', 'Lisa Thompson', 'Robert Brown',
+      'Jennifer Lee', 'Michael Taylor', 'Amanda Martinez', 'Chris Anderson'
+    ];
+
+    const sampleMessages = [
+      'This is amazing! 🔥',
+      'I love this energy!',
+      'Incredible insights today',
+      'Thank you for sharing this!',
+      'Who else is feeling motivated?',
+      'Best session ever!',
+      'Taking so many notes right now',
+      'This changed my perspective',
+      'Can\'t wait to implement this',
+      'So grateful to be here!',
+      'Mind = blown 🤯',
+      'YES! This is exactly what I needed',
+      'The energy in this room is electric!',
+      'Learning so much today',
+      'This is life-changing content',
+      '🙌🙌🙌',
+      'Absolutely incredible!',
+      'Who\'s taking action on this?',
+      'I\'m ready to transform!',
+      'Best investment I\'ve made',
+      'The breakthrough moment just happened!',
+      'Feeling unstoppable right now'
+    ];
+
+    // Send a message every 3-8 seconds
+    const interval = setInterval(() => {
+      const sender = sampleNames[Math.floor(Math.random() * sampleNames.length)];
+      const content = sampleMessages[Math.floor(Math.random() * sampleMessages.length)];
+
+      this.messageAggregator.addMessage({
+        sender,
+        content,
+        room: roomName,
+        meetingId,
+        timestamp: new Date().toISOString(),
+        type: 'chat'
+      });
+    }, 3000 + Math.random() * 5000);
+
+    // Send initial welcome message
+    setTimeout(() => {
+      this.messageAggregator.addMessage({
+        sender: 'System',
+        content: `Connected to ${roomName} (Mock Mode - Demo messages will appear)`,
+        room: roomName,
+        meetingId,
+        timestamp: new Date().toISOString(),
+        type: 'system'
+      });
+    }, 500);
+
+    return interval;
+  }
+
+  /**
    * Disconnect from a meeting's RTMS stream
    */
   disconnect(meetingId) {
@@ -122,6 +194,11 @@ export class RTMSManager {
 
     if (!connection) {
       return;
+    }
+
+    // Clear mock message interval if exists
+    if (connection.mockInterval) {
+      clearInterval(connection.mockInterval);
     }
 
     if (!connection.mock && connection.client) {

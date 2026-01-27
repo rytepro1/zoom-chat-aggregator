@@ -1,10 +1,11 @@
-import React from 'react';
-import { useSocket } from './hooks/useSocket';
+import React, { useState } from 'react';
+import { useSocketContext } from './contexts/SocketContext';
 import { useSettings } from './contexts/SettingsContext';
 import ChatFeed from './components/ChatFeed';
 import StatusBar from './components/StatusBar';
 import RoomFilter from './components/RoomFilter';
 import SettingsPanel from './components/SettingsPanel';
+import MeetingManager from './components/MeetingManager';
 
 function App() {
   const {
@@ -14,7 +15,9 @@ function App() {
     connected,
     selectedRoom,
     setSelectedRoom
-  } = useSocket();
+  } = useSocketContext();
+
+  const [showMeetingPanel, setShowMeetingPanel] = useState(true);
 
   const { settings, setSettingsPanelOpen } = useSettings();
 
@@ -92,17 +95,58 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex overflow-hidden">
-        {/* Sidebar - Room Filter */}
+        {/* Sidebar - Meeting Manager & Room Filter */}
         {settings.sidebarVisible && (
           <aside
-            className="w-64 border-r border-white/10 p-4 overflow-y-auto transition-colors duration-300"
+            className="w-80 border-r border-white/10 overflow-y-auto transition-colors duration-300 flex flex-col"
             style={{ backgroundColor: 'var(--header-color)' }}
           >
-            <RoomFilter
-              rooms={rooms}
-              selectedRoom={selectedRoom}
-              onSelectRoom={setSelectedRoom}
-            />
+            {/* Tab Buttons */}
+            <div className="flex border-b border-white/10">
+              <button
+                onClick={() => setShowMeetingPanel(true)}
+                className={`flex-1 py-3 px-4 text-sm font-medium transition-colors ${
+                  showMeetingPanel
+                    ? 'border-b-2 opacity-100'
+                    : 'opacity-60 hover:opacity-80'
+                }`}
+                style={{
+                  borderColor: showMeetingPanel ? 'var(--accent-color)' : 'transparent',
+                  color: showMeetingPanel ? 'var(--accent-color)' : 'inherit'
+                }}
+              >
+                Connect
+              </button>
+              <button
+                onClick={() => setShowMeetingPanel(false)}
+                className={`flex-1 py-3 px-4 text-sm font-medium transition-colors ${
+                  !showMeetingPanel
+                    ? 'border-b-2 opacity-100'
+                    : 'opacity-60 hover:opacity-80'
+                }`}
+                style={{
+                  borderColor: !showMeetingPanel ? 'var(--accent-color)' : 'transparent',
+                  color: !showMeetingPanel ? 'var(--accent-color)' : 'inherit'
+                }}
+              >
+                Rooms ({rooms.length})
+              </button>
+            </div>
+
+            {/* Panel Content */}
+            <div className="flex-1 overflow-y-auto">
+              {showMeetingPanel ? (
+                <MeetingManager />
+              ) : (
+                <div className="p-4">
+                  <RoomFilter
+                    rooms={rooms}
+                    selectedRoom={selectedRoom}
+                    onSelectRoom={setSelectedRoom}
+                  />
+                </div>
+              )}
+            </div>
           </aside>
         )}
 

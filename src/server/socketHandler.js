@@ -2,7 +2,7 @@
  * Socket.io event handlers for real-time client communication
  */
 
-export function setupSocketHandlers(io, messageAggregator) {
+export function setupSocketHandlers(io, messageAggregator, rtmsManager = null) {
   io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
 
@@ -42,6 +42,62 @@ export function setupSocketHandlers(io, messageAggregator) {
     socket.on('unsubscribeFromRoom', (roomId) => {
       socket.leave(`room:${roomId}`);
       console.log(`Client ${socket.id} unsubscribed from room: ${roomId}`);
+    });
+
+    // Handle meeting connection request from client
+    socket.on('connectToMeeting', async ({ meetingId, passcode, roomName }) => {
+      if (!rtmsManager) {
+        socket.emit('meetingError', { error: 'RTMS manager not available' });
+        return;
+      }
+
+      try {
+        await rtmsManager.connect(meetingId, null, roomName || `Meeting ${meetingId}`);
+
+        messageAggregator.addRoom({
+          id: meetingId,
+          name: roomName || `Meeting ${meetingId}`,
+          participantCount: 0
+        });
+
+        io.emit('meetingConnected', {
+          id: meetingId,
+          meetingId,
+          roomName: roomName || `Meeting ${meetingId}`,
+          status: 'connected',
+          isMock: rtmsManager.useMockMode
+        });
+      } catch (error) {
+        socket.emit('meetingError', { error: error.message });
+      }
+    });
+
+    // Handle meeting disconnect request
+    socket.on('disconnectFromMeeting', (meetingId) => {
+      if (!rtmsManager) return;
+
+      rtmsManager.disconnect(meetingId);
+      messageAggregator.removeRoom(meetingId);
+      io.emit('meetingDisconnected', { id: meetingId });
+    });
+
+    // Get connected meetings
+    socket.on('getConnectedMeetings', () => {
+      if (!rtmsManager) {
+        socket.emit('connectedMeetings', { meetings: [] });
+        return;
+      }
+
+      const connections = rtmsManager.getActiveConnections();
+      socket.emit('connectedMeetings', {
+        meetings: connections.map(conn => ({
+          id: conn.meetingId,
+          meetingId: conn.meetingId,
+          roomName: conn.roomName,
+          status: 'connected',
+          isMock: conn.isMock
+        }))
+      });
     });
 
     // Handle disconnect
