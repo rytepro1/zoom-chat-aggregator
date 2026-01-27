@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { MeetingsProvider } from './MeetingsContext';
+import { ModerationProvider } from './ModerationContext';
 
 const SocketContext = createContext(null);
 
@@ -99,7 +100,9 @@ export function SocketProvider({ children }) {
   return (
     <SocketContext.Provider value={value}>
       <MeetingsProvider socket={socket}>
-        {children}
+        <ModerationProvider socket={socket}>
+          {children}
+        </ModerationProvider>
       </MeetingsProvider>
     </SocketContext.Provider>
   );

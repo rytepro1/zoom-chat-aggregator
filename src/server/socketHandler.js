@@ -2,6 +2,13 @@
  * Socket.io event handlers for real-time client communication
  */
 
+// Moderation state (shared across all clients)
+let moderationState = {
+  highlightedIds: [],
+  queue: [],
+  featuredMessage: null
+};
+
 export function setupSocketHandlers(io, messageAggregator, rtmsManager = null) {
   io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
@@ -98,6 +105,33 @@ export function setupSocketHandlers(io, messageAggregator, rtmsManager = null) {
           isMock: conn.isMock
         }))
       });
+    });
+
+    // ============================================
+    // MODERATION HANDLERS
+    // ============================================
+
+    // Get current moderation state
+    socket.on('getModerationState', () => {
+      socket.emit('moderationState', moderationState);
+    });
+
+    // Handle moderation updates (broadcast to all clients)
+    socket.on('moderationUpdate', (update) => {
+      // Update server state
+      if (update.highlightedIds !== undefined) {
+        moderationState.highlightedIds = update.highlightedIds;
+      }
+      if (update.queue !== undefined) {
+        moderationState.queue = update.queue;
+      }
+      if (update.featuredMessage !== undefined) {
+        moderationState.featuredMessage = update.featuredMessage;
+      }
+
+      // Broadcast to all clients (including sender for consistency)
+      io.emit('moderationUpdate', update);
+      console.log('Moderation update:', Object.keys(update).join(', '));
     });
 
     // Handle disconnect

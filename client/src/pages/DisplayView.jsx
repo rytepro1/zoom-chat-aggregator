@@ -2,23 +2,23 @@ import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import ChatMessage from '../components/ChatMessage';
 import { SettingsProvider, useSettings } from '../contexts/SettingsContext';
+import { ModerationProvider, useModeration } from '../contexts/ModerationContext';
 
 const SOCKET_URL = import.meta.env.DEV
   ? 'http://localhost:3001'
   : window.location.origin;
 
-function DisplayViewContent() {
+function DisplayViewContent({ socket }) {
   const [messages, setMessages] = useState([]);
   const [connected, setConnected] = useState(false);
   const [stats, setStats] = useState({ totalMessages: 0, activeRooms: 0 });
   const [autoScroll, setAutoScroll] = useState(true);
   const containerRef = useRef(null);
   const { settings } = useSettings();
+  const { featuredMessage } = useModeration();
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling']
-    });
+    if (!socket) return;
 
     socket.on('connect', () => {
       setConnected(true);
@@ -45,10 +45,11 @@ function DisplayViewContent() {
       setStats(data.stats);
     });
 
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
+    // Set connected if already connected
+    if (socket.connected) {
+      setConnected(true);
+    }
+  }, [socket]);
 
   // Auto-scroll
   useEffect(() => {
@@ -106,6 +107,33 @@ function DisplayViewContent() {
           </span>
         </div>
       </div>
+
+      {/* Featured Message Banner */}
+      {featuredMessage && (
+        <div
+          className="mx-6 mt-4 p-6 rounded-xl shadow-2xl animate-pulse"
+          style={{
+            backgroundColor: featuredMessage.roomColor || 'var(--accent-color)',
+            animation: 'none'
+          }}
+        >
+          <div className="flex items-start gap-4">
+            <div className="flex-shrink-0">
+              <svg className="w-10 h-10 text-white/80" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h2v-6h-2v6zm0-8h2V7h-2v2z"/>
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white/80 text-sm font-medium mb-1">
+                {featuredMessage.sender} • {featuredMessage.room}
+              </p>
+              <p className="text-white text-2xl font-semibold break-words">
+                {featuredMessage.content}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Full-screen chat feed */}
       <div
@@ -187,11 +215,26 @@ function DisplayViewContent() {
   );
 }
 
-// Wrap with SettingsProvider for standalone use
+// Wrap with providers for standalone use
 function DisplayView() {
+  const [socket, setSocket] = useState(null);
+
+  useEffect(() => {
+    const newSocket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling']
+    });
+    setSocket(newSocket);
+
+    return () => {
+      newSocket.disconnect();
+    };
+  }, []);
+
   return (
     <SettingsProvider>
-      <DisplayViewContent />
+      <ModerationProvider socket={socket}>
+        <DisplayViewContent socket={socket} />
+      </ModerationProvider>
     </SettingsProvider>
   );
 }
