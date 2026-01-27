@@ -11,10 +11,10 @@ const SOCKET_URL = import.meta.env.DEV
 function DisplayViewContent({ socket }) {
   const [messages, setMessages] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [autoScroll, setAutoScroll] = useState(true);
   const [showControls, setShowControls] = useState(false);
   const containerRef = useRef(null);
   const hideControlsTimeout = useRef(null);
+  const scrollIntervalRef = useRef(null);
   const { settings } = useSettings();
   const { featuredMessage } = useModeration();
 
@@ -35,25 +35,44 @@ function DisplayViewContent({ socket }) {
     if (socket.connected) setConnected(true);
   }, [socket]);
 
-  // Auto-scroll
+  // Always auto-scroll on new messages - no pause capability
   useEffect(() => {
-    if (autoScroll && containerRef.current) {
-      containerRef.current.scrollTo({
-        top: containerRef.current.scrollHeight,
-        behavior: settings.animationsEnabled ? 'smooth' : 'auto'
+    if (containerRef.current) {
+      // Use requestAnimationFrame for smoother scrolling
+      requestAnimationFrame(() => {
+        if (containerRef.current) {
+          containerRef.current.scrollTo({
+            top: containerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
       });
     }
-  }, [messages, autoScroll, settings.animationsEnabled]);
+  }, [messages]);
 
-  // Detect manual scroll
-  const handleScroll = () => {
-    if (!containerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
-    if (!isAtBottom && autoScroll) {
-      setAutoScroll(false);
-    }
-  };
+  // Backup: periodic scroll check to ensure we stay at bottom
+  useEffect(() => {
+    scrollIntervalRef.current = setInterval(() => {
+      if (containerRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+        const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+
+        // If not near bottom, scroll down
+        if (!isNearBottom) {
+          containerRef.current.scrollTo({
+            top: containerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      }
+    }, 2000); // Check every 2 seconds
+
+    return () => {
+      if (scrollIntervalRef.current) {
+        clearInterval(scrollIntervalRef.current);
+      }
+    };
+  }, []);
 
   // Show controls on mouse move, hide after delay
   const handleMouseMove = () => {
@@ -65,18 +84,6 @@ function DisplayViewContent({ socket }) {
       setShowControls(false);
     }, 3000);
   };
-
-  // Keyboard shortcut: Space to toggle pause
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.code === 'Space') {
-        e.preventDefault();
-        setAutoScroll(prev => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   return (
     <div
@@ -123,7 +130,6 @@ function DisplayViewContent({ socket }) {
       {/* Full-screen chat feed */}
       <div
         ref={containerRef}
-        onScroll={handleScroll}
         className="h-full w-full overflow-y-auto px-8 py-6"
         style={{
           paddingTop: featuredMessage ? '200px' : '24px'
@@ -148,7 +154,7 @@ function DisplayViewContent({ socket }) {
         )}
       </div>
 
-      {/* Minimal controls - only visible on mouse move */}
+      {/* Minimal status indicator - only visible on mouse move */}
       <div
         className={`fixed bottom-6 right-6 flex items-center gap-3 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0'
@@ -157,49 +163,15 @@ function DisplayViewContent({ socket }) {
       >
         {/* Connection indicator */}
         <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-black/50 backdrop-blur-sm">
-          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
+          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
           <span className="text-white/70 text-sm">
             {connected ? 'Live' : 'Disconnected'}
           </span>
+          <span className="text-white/50 text-sm">
+            • {messages.length} messages
+          </span>
         </div>
-
-        {/* Pause/Play */}
-        <button
-          onClick={() => {
-            setAutoScroll(prev => {
-              if (!prev && containerRef.current) {
-                containerRef.current.scrollTo({
-                  top: containerRef.current.scrollHeight,
-                  behavior: 'smooth'
-                });
-              }
-              return !prev;
-            });
-          }}
-          className="w-12 h-12 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-colors"
-          title={autoScroll ? 'Pause (Space)' : 'Play (Space)'}
-          style={{ cursor: 'pointer' }}
-        >
-          {autoScroll ? (
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-            </svg>
-          ) : (
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
       </div>
-
-      {/* Paused indicator - center of screen */}
-      {!autoScroll && (
-        <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
-          <div className="bg-black/60 backdrop-blur-sm px-8 py-4 rounded-2xl">
-            <span className="text-white text-xl font-medium">⏸ Paused</span>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
