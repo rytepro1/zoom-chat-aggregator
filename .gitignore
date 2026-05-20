@@ -21,3 +21,9 @@ npm-debug.log*
 # IDE
 .vscode/
 .idea/
+
+# Local-only launcher artifacts.
+# launcher/  is the old AppleScript launcher, superseded by launcher-v2/.
+# 1x/        is source artwork; canonical copy lives in launcher-v2/icon-source.png.
+launcher/
+1x/
