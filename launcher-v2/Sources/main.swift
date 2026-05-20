@@ -178,11 +178,76 @@ struct WebView: NSViewRepresentable {
         config.websiteDataStore = .default()
 
         let webView = WKWebView(frame: .zero, configuration: config)
+        // Handle window.open() (used by the React UI's "Pop out display" button)
+        // by creating a real native window via PopOutWindowManager.
+        webView.uiDelegate = context.coordinator
         webView.load(URLRequest(url: url))
-        // Hide the rubber-band scroll on the document body (looks better in a window).
         webView.setValue(false, forKey: "drawsBackground")
         return webView
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {}
+
+    func makeCoordinator() -> WebViewCoordinator { WebViewCoordinator() }
+}
+
+// MARK: - window.open handling
+
+final class WebViewCoordinator: NSObject, WKUIDelegate {
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        let width  = windowFeatures.width?.doubleValue  ?? 1280
+        let height = windowFeatures.height?.doubleValue ?? 720
+
+        // Reuse the configuration WebKit passed in so cookies/session match the parent.
+        let newWebView = WKWebView(frame: .zero, configuration: configuration)
+        newWebView.uiDelegate = self // allow chained window.open from this window too
+        newWebView.setValue(false, forKey: "drawsBackground")
+
+        PopOutWindowManager.shared.host(
+            webView: newWebView,
+            size: CGSize(width: width, height: height),
+            title: "ZoomChat — Display"
+        )
+
+        // Returning the new web view tells WebKit to load
+        // navigationAction.request into it automatically.
+        return newWebView
+    }
+}
+
+/// Hosts pop-out WKWebViews in native NSWindows. Keeps strong references
+/// so windows aren't deallocated as soon as the WebKit callback returns.
+final class PopOutWindowManager {
+    static let shared = PopOutWindowManager()
+    private var windows: [NSWindow] = []
+
+    func host(webView: WKWebView, size: CGSize, title: String) {
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = title
+        window.contentView = webView
+        window.collectionBehavior.insert(.fullScreenPrimary) // green ⌃⌘F button
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+
+        windows.append(window)
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let window = window else { return }
+            self?.windows.removeAll { $0 === window }
+        }
+    }
 }
