@@ -1,5 +1,20 @@
 # Zoom RTMS Integration — Technical Brief
 
+> ⚠️ **STATUS: Approach abandoned May 2026.** RTMS is the wrong tool for our
+> actual use case (capturing chat from meetings hosted by **external client
+> accounts** outside our Zoom org). RTMS event routing is gated on
+> Marketplace App installation on the hosting account, which we can't
+> guarantee for client-hosted meetings.
+>
+> The replacement direction — using the Zoom Meeting SDK / Video SDK to
+> spawn a bot participant per meeting — is documented in
+> [`CHAT-CAPTURE-ARCHITECTURE.md`](./CHAT-CAPTURE-ARCHITECTURE.md).
+>
+> This file is kept for reference (and in case some future event has us
+> hosting our own rooms, where RTMS would be a good fit).
+
+---
+
 This document describes how the **Zoom Chat Aggregator** application uses
 Zoom's Real-Time Media Streams (RTMS) feature, intended as a reference for
 Zoom developer support when reviewing or enabling RTMS access on the

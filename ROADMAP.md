@@ -5,6 +5,37 @@ Each item is self-contained — a future session can pick any one and ship it.
 
 ---
 
+## 0. Migrate chat ingestion from RTMS to Meeting SDK bot (foundational)
+
+**Discovered May 2026 after the revival.** The current app's
+`MessageAggregator` is only ever fed by mock data because the actual
+chat capture path was never functional end-to-end. The intended path
+(RTMS) doesn't fit RYTE's real use case (capturing chat from meetings
+hosted by *external client accounts*), because RTMS requires the
+Marketplace App to be installed on the hosting account.
+
+Full architecture decision and rationale:
+[`docs/CHAT-CAPTURE-ARCHITECTURE.md`](docs/CHAT-CAPTURE-ARCHITECTURE.md).
+
+**Direction:** rebuild the chat ingestion layer to use the Zoom Meeting
+SDK (likely the Linux Meeting SDK) to spawn a bot participant per
+meeting. The operator's existing "paste Meeting ID + passcode" UX
+becomes real: the server spawns a bot that joins each meeting and pipes
+chat events into the existing `MessageAggregator`.
+
+**Blocked on:** answers from Zoom developer support to the open
+questions in `docs/CHAT-CAPTURE-ARCHITECTURE.md` (which SDK, licensing,
+bot visibility, host-side admit requirements, bandwidth).
+
+**Effort once unblocked:** ~5 days of focused work. Replaces the
+existing `src/rtms/RTMSManager.js` with a new `BotManager`; the React
+UI, message aggregation, moderation, and display layers stay the same.
+
+**This issue takes priority over everything else below** — until chat
+capture is real, the other items are polish on a demo.
+
+---
+
 ## 1. Display window text size doesn't respond to the font-size slider
 
 **Symptom.** Changing the "Base Font Size" slider (or any other typography
@@ -232,11 +263,15 @@ the launcher window-behavior changes are an hour.
 
 ## Suggested order
 
-1. **Issue #1 (font sync)** — small, isolated, immediate win.
+0. **Issue #0 (chat ingestion rebuild)** — blocking everything else for
+   real production use. Pursue once Zoom support has answered the
+   Meeting SDK questions.
+1. **Issue #1 (font sync)** — small, isolated, immediate win. Safe to
+   do any time, independent of #0.
 2. **Issue #3 (persistence + exit dialog)** — biggest infrastructure
    change. Once messages are durable, everything else gets safer.
 3. **Issue #2 (save/export)** — builds naturally on top of #3's storage
    layer (a "saved" flag is just one more column).
 
-A session that did all three end-to-end is roughly 1–1.5 days of focused
-work.
+#1, #2, #3 are roughly 1–1.5 days of focused work end-to-end. #0 is its
+own ~5 days plus whatever back-and-forth with Zoom takes.
