@@ -1,7 +1,8 @@
 # Chat Capture Architecture — Decision Record
 
 **Date:** May 2026
-**Status:** Decision made, implementation pending.
+**Status:** Direction confirmed (Meeting SDK over RTMS); build-vs-buy
+decision pending. See "Three viable paths" section below.
 
 ## Context
 
@@ -51,36 +52,147 @@ The bot model matches our existing UX (operator pastes a Meeting ID +
 passcode, the app "joins" that meeting and starts capturing chat) and
 removes the cross-org install barrier.
 
-## What needs to be researched / decided
+## What we now know (from Zoom docs research, May 2026)
 
-These open questions need answers before implementation begins. Most
-require a follow-up conversation with Zoom developer support — but
-**asking about the Meeting SDK, not RTMS**.
+The research that resolved most of the open questions is summarized
+below. Full source URLs are at the bottom of this document.
 
-1. **Which SDK exactly?** Zoom publishes several:
-   - **Meeting SDK for Linux** — headless, designed for server bots.
-     Most likely fit.
-   - **Video SDK** — newer, more bot-friendly, but a different product
-     line with separate licensing.
-   - **Web Meeting SDK** — runs in a browser; would require us to host
-     a hidden browser-based join, more brittle.
-2. **Licensing model.** Meeting SDK Bots typically require dedicated
-   licensing distinct from the basic Marketplace App. Need pricing.
-3. **Bot visibility.** Can we name the bot (e.g. "Chat Capture by
-   RYTE") and optionally hide it from the gallery view? What's the
-   minimum-friction UX for the meeting host?
-4. **Host approval.** Some Zoom security settings auto-admit bots, others
-   require a host to admit each one. Need to know what the host needs to
-   do on their end (probably nothing, but verify).
-5. **Bandwidth.** A Meeting SDK bot may technically subscribe to audio
-   and video streams even if we discard them. Confirm we can run "chat
-   only" or what the resource cost is at scale (say 5–10 concurrent
-   meetings).
-6. **Newer Zoom features.** Zoom has been blurring the line between RTMS
-   and bots — check whether there is now an "RTMS Bot" or
-   "invite-as-participant RTMS" pattern that would give us RTMS-style
-   data flow with bot-style cross-org access. If so, that might be the
-   best of both worlds.
+### SDK choice — confirmed
+
+- **Meeting SDK** is correct (Video SDK is for custom video sessions,
+  not joining regular Zoom meetings).
+- Within Meeting SDK, the **Linux Meeting SDK** is the right flavor —
+  Zoom publishes an official
+  [`meetingsdk-headless-linux-sample`](https://github.com/zoom/meetingsdk-headless-linux-sample)
+  repo specifically for headless bot use. macOS and Windows SDKs are
+  built around GUI clients.
+- Our app runs on macOS but the bot subprocess should run in a
+  **Docker Linux container** (locally via Docker Desktop on the
+  operator's Mac, or on a server for scale).
+
+### The OBF (On Behalf Of) requirement — the big change
+
+As of **March 2, 2026**, Meeting SDK apps joining a meeting hosted by
+an external Zoom account must use an **OBF token**. This means a Zoom
+user who has previously OAuth-authorized our app must be present in
+the meeting for the entire time the bot is in it. If they leave, Zoom
+immediately disconnects the bot.
+
+**Practical impact for RYTE:** This is workable, because a RYTE
+producer or moderator is essentially always in the meeting anyway —
+they just need to OAuth-authorize the app once. It's not "unattended
+bot for arbitrary meetings" (that pattern is dead), but it is "the
+producer who's already there can bring the chat-capture bot along."
+
+The authorizing user does *not* need to be the meeting host — they can
+attend as a regular participant. Their Zoom account does need to be
+paid (Pro tier or higher).
+
+### Bot UX
+
+- Bot is a real participant; appears in the participant list. No
+  "invisible" mode.
+- Display name is settable at join time (recommend something clear
+  like "Chat Capture by RYTE Productions" so hosts don't kick it).
+- If the host has waiting rooms on (very common for external client
+  meetings), someone has to **admit the bot manually**. There's no
+  auto-admit.
+- If the host has "Only authenticated users can join" enabled, the
+  bot needs its own signed-in Zoom account to satisfy that rule.
+
+### Chat-only operation — supported
+
+The Linux SDK exposes `IMeetingChatController` with the
+`onChatMsgNotification` callback. We can subscribe only to chat events
+and ignore audio/video. Resource footprint is in the low-hundreds-of-MB
+per bot — 5–10 concurrent bots on a single machine is realistic.
+
+**Open question:** does subscribing only to chat (no audio/video)
+avoid Zoom's recording-consent prompt? This matters for UX. The docs
+suggest only raw audio/video access triggers the prompt, but it's
+worth confirming with Zoom support.
+
+### Node.js integration
+
+The Linux Meeting SDK is **C++ only**. No first-party Node.js binding.
+
+Realistic architecture:
+- One Docker container per active meeting, based on the headless
+  Linux sample.
+- The C++ bot in each container opens a Socket.io / WebSocket
+  connection back to our Node Express server and streams chat events
+  as JSON.
+- Our Node backend orchestrates lifecycle: mint OBF token → `docker
+  run` the bot container with meeting ID + token as env vars → wait
+  for chat events → on meeting end or OBF revocation, container exits
+  and the backend cleans up.
+
+### Pricing — needs sales conversation
+
+Zoom does not publish per-bot or per-minute pricing. Real production
+use is gated on their **ISV Partner Program**, which is negotiated.
+Budget for a sales call before committing to in-house build.
+
+For comparison, the third-party service Recall.ai publishes
+**~$0.50–$0.70/bot-hour** as their list price. At RYTE's expected
+scale (5 bots × ~30 hours/month) that's **~$75–$100/month**, which is
+likely far cheaper than the operational cost of self-hosting Docker
+containers and managing OBF flows in-house.
+
+### RTMS — definitively the wrong tool
+
+Re-verified during this research:
+- RTMS still requires the host's org to enable RTMS account-wide and
+  the host to approve real-time data sharing per meeting.
+- There is **no** "RTMS for invited participants" mode. Non-hosts
+  cannot initiate RTMS.
+- RTMS data streams cover audio, video, and transcripts — but **not
+  chat**. Even if RTMS worked for our hosting situation, it wouldn't
+  give us what we need.
+
+## Three viable paths
+
+| Path | Description | Effort | Cost (est.) | Trade-offs |
+|---|---|---|---|---|
+| **A. Recall.ai (or similar)** | Third-party meeting-bot service. They handle OBF, Docker, SDK, multi-platform. We hit one HTTP endpoint per meeting. | ~1 day prototype, ~3 days to wire into existing UI | ~$75–$100/month at 5 bots × 30 hrs | Fastest. Vendor dependency. Loses fine-grained control. |
+| **B. Build with Linux Meeting SDK** | Roll our own: Docker containers per bot, C++ bot processes, OBF flow, IPC to Node. | ~2–3 weeks | ISV pricing TBD with Zoom sales (likely $100s/month minimum) | Full control, own IP. Real engineering project. |
+| **C. Park for now** | Keep mock mode for demos; defer real chat capture until a confirmed paying customer / scheduled show. | 0 days | $0 | No production capability. Fine if revenue isn't blocked on this. |
+
+**Recommendation:** Path A (Recall.ai) for first production deployment.
+Migrate to Path B later if/when economics, control, or roadmap
+requirements demand it. Prototype-then-evaluate is cheaper than
+build-then-discover-Recall-would've-worked.
+
+## Open questions for Zoom developer support
+
+If we pursue Path B (or even just want to negotiate better with
+Recall.ai), these are worth asking Zoom directly:
+
+- Is there any exception to the OBF chaperone rule for "trusted
+  recording vendor" / "production-staff bot" use cases?
+- Does chat-only subscription (no audio/video) avoid the recording-
+  consent prompt?
+- What's the ISV Partner Program rate for ~5–10 concurrent bots
+  running ~30 hours/month?
+- For "Only authenticated users can join," does the OBF user's
+  identity satisfy the auth rule, or does the bot itself need to be a
+  signed-in account?
+- Is there a roadmap for officially supported Node.js bindings on the
+  Meeting SDK?
+
+## Source URLs
+
+- [Meeting SDK landing](https://developers.zoom.us/docs/meeting-sdk/)
+- [Linux Meeting SDK overview](https://developers.zoom.us/docs/meeting-sdk/linux/)
+- [Meeting SDK auth model](https://developers.zoom.us/docs/meeting-sdk/auth/)
+- [OBF token FAQ (official)](https://developers.zoom.us/docs/meeting-sdk/obf-faq/)
+- [OBF transition blog](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/)
+- [Headless Linux bot sample (official)](https://github.com/zoom/meetingsdk-headless-linux-sample)
+- [Raw recording sample](https://github.com/zoom/meetingsdk-linux-raw-recording-sample)
+- [Meeting SDK vs Video SDK comparison](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0064689)
+- [Recall.ai's OBF explainer (third-party)](https://www.recall.ai/blog/zoom-obf)
+- [Recall.ai's RTMS limitations explainer](https://www.recall.ai/blog/what-is-zoom-rtms)
+- [Dev forum: anonymous join + chaperone rule](https://devforum.zoom.us/t/clarification-on-meeting-sdk-auth-changes-obf-tokens-anonymous-join-and-chaperone-rule/141617)
 
 ## What this means in the short term
 

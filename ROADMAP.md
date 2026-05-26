@@ -23,13 +23,20 @@ meeting. The operator's existing "paste Meeting ID + passcode" UX
 becomes real: the server spawns a bot that joins each meeting and pipes
 chat events into the existing `MessageAggregator`.
 
-**Blocked on:** answers from Zoom developer support to the open
-questions in `docs/CHAT-CAPTURE-ARCHITECTURE.md` (which SDK, licensing,
-bot visibility, host-side admit requirements, bandwidth).
+**Blocked on:** build-vs-buy decision (Recall.ai vs in-house Linux
+Meeting SDK + Docker stack). Most of the original "open questions" were
+answered in the May 2026 docs research — see the "What we now know"
+section of `docs/CHAT-CAPTURE-ARCHITECTURE.md` for the full findings,
+including the new OBF chaperone requirement Zoom rolled out March 2026.
 
-**Effort once unblocked:** ~5 days of focused work. Replaces the
-existing `src/rtms/RTMSManager.js` with a new `BotManager`; the React
-UI, message aggregation, moderation, and display layers stay the same.
+**Effort:**
+- **Path A (Recall.ai):** ~1 day prototype, ~3 days production. ~$75–$100/month
+  at expected scale.
+- **Path B (build in-house):** ~2–3 weeks. ISV pricing TBD with Zoom sales.
+
+Either path replaces the existing `src/rtms/RTMSManager.js` with a new
+`BotManager`; the React UI, message aggregation, moderation, and display
+layers stay the same.
 
 **This issue takes priority over everything else below** — until chat
 capture is real, the other items are polish on a demo.
