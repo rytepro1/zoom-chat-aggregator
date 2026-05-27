@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSocketContext } from './contexts/SocketContext';
 import { useSettings } from './contexts/SettingsContext';
+import { useAuth } from './contexts/AuthContext';
 import ChatFeed from './components/ChatFeed';
 import StatusBar from './components/StatusBar';
 import RoomFilter from './components/RoomFilter';
@@ -10,6 +11,7 @@ import ModerationPanel from './components/ModerationPanel';
 import SavedPanel from './components/SavedPanel';
 import SessionHeader from './components/SessionHeader';
 import RostersPanel from './components/RostersPanel';
+import AccountMenu from './components/AccountMenu';
 import { useSaved } from './contexts/SavedContext';
 
 function App() {
@@ -70,6 +72,7 @@ function App() {
             <div className="flex items-center gap-4">
               <SessionHeader />
               <StatusBar connected={connected} stats={stats} />
+              <AccountMenu />
               <button
                 onClick={() => {
                   window.open('/display', 'DisplayView', 'width=1920,height=1080,menubar=no,toolbar=no,location=no,status=no');

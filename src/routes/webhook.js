@@ -180,12 +180,10 @@ router.post('/recall/chat', (req, res) => {
     console.warn('[Recall webhook] RECALL_WEBHOOK_SECRET not set — accepting without verification (set it in Railway env vars)');
   }
 
-  try {
-    recallBotManager.handleChatEvent(req.body);
-  } catch (err) {
-    console.error('[Recall webhook] handler error:', err);
-  }
-  // Always 200 so Recall doesn't retry on our parsing bugs.
+  // Fire-and-forget — handler is async now (looks up org state) but the
+  // 200 response shouldn't wait on the DB write or socket emit.
+  Promise.resolve(recallBotManager.handleChatEvent(req.body))
+    .catch(err => console.error('[Recall webhook] handler error:', err));
   res.status(200).json({ received: true });
 });
 

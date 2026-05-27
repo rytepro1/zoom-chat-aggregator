@@ -25,7 +25,10 @@ export function SocketProvider({ children }) {
 
   useEffect(() => {
     const newSocket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling']
+      transports: ['websocket', 'polling'],
+      // Send the session cookie on the WebSocket handshake so the
+      // server-side auth middleware can identify the user.
+      withCredentials: true,
     });
 
     newSocket.on('connect', () => {
@@ -36,6 +39,16 @@ export function SocketProvider({ children }) {
     newSocket.on('disconnect', () => {
       console.log('Disconnected from server');
       setConnected(false);
+    });
+
+    // Server rejected the auth handshake (cookie missing/expired). Send
+    // the user back to sign in — sticky disconnects with this reason
+    // mean their session is gone.
+    newSocket.on('connect_error', (err) => {
+      console.warn('[socket] connect_error:', err.message);
+      if (/sign|session/i.test(err.message || '')) {
+        window.location.href = '/signin';
+      }
     });
 
     // Receive initial state

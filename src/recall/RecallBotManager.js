@@ -89,27 +89,26 @@ function describeRecallError(status, body) {
 }
 
 export class RecallBotManager {
-  constructor({ messageAggregator, apiKey, apiBase, publicWebhookUrl, db, sessionManager } = {}) {
-    this.messageAggregator = messageAggregator;
+  constructor({ apiKey, apiBase, publicWebhookUrl, db, orgState } = {}) {
     this.apiKey = apiKey || '';
     this.apiBase = (apiBase || 'https://us-east-1.recall.ai/api/v1').replace(/\/+$/, '');
     this.publicWebhookUrl = (publicWebhookUrl || '').replace(/\/+$/, '');
     // Optional — when present, every dispatched bot writes a bot_usage
     // row that gets closed out by /webhook/recall/status (or by
-    // disconnect()). Foundation for the eventual SaaS billing layer;
-    // safe to leave null in dev / in-memory mode.
+    // disconnect()). Foundation for the SaaS billing layer.
     this.db = db || null;
-    this.sessionManager = sessionManager || null;
+    // OrgState container — Phase 2. Lets us route inbound chat events
+    // (which arrive on a singleton webhook URL) to the right org's
+    // MessageAggregator + SessionManager by looking up the bot's orgId.
+    this.orgState = orgState || null;
 
-    // Two-way mapping. botsByMeeting holds the canonical record; meetingsByBot
-    // is a reverse index used when an inbound webhook only carries a bot id.
-    this.botsByMeeting = new Map(); // meetingId -> { botId, meetingId, roomName, roomColor, botName, connectedAt }
+    // botsByMeeting now includes orgId. meetingId is unique across the
+    // system (Recall refuses duplicate bots for the same Zoom meeting),
+    // so the meetingId key remains globally safe.
+    this.botsByMeeting = new Map(); // meetingId -> { botId, meetingId, roomName, roomColor, botName, connectedAt, orgId }
     this.meetingsByBot = new Map(); // botId     -> meetingId
 
-    // Per-bot outbound rate limit (token bucket). Default 20 messages
-    // per minute per bot — generous for human-typed replies, protective
-    // against runaway loops or credential abuse. Belt-and-suspenders
-    // safety net per Theo's request.
+    // Per-bot outbound rate limit (token bucket).
     this.sendRateLimitPerMinute = 20;
     this.sendRateState = new Map(); // botId -> { tokens, lastRefillMs }
   }
@@ -124,12 +123,13 @@ export class RecallBotManager {
    * vendor-branded default) so customers can present the bot under
    * their own identity, e.g. "Audience Q&A" or "Producer Theo".
    */
-  async connect(meetingId, passcode, roomName, roomColor = '#ef4444', botName) {
+  async connect(orgId, meetingId, passcode, roomName, roomColor = '#ef4444', botName) {
     if (!this.isConfigured()) {
       throw new Error(
         'RecallBotManager is not configured. Set RECALL_API_KEY and PUBLIC_WEBHOOK_URL in your environment.'
       );
     }
+    if (!orgId) throw new Error('orgId is required to dispatch a bot');
 
     const cleanBotName = String(botName || '').trim();
     if (!cleanBotName) {
@@ -137,8 +137,15 @@ export class RecallBotManager {
     }
 
     if (this.botsByMeeting.has(meetingId)) {
-      console.log(`[Recall] Already have a bot for meeting: ${meetingId}`);
-      return this.botsByMeeting.get(meetingId);
+      const existing = this.botsByMeeting.get(meetingId);
+      if (existing.orgId !== orgId) {
+        // Defensive: another org already owns a bot for this meetingId.
+        // Recall would refuse a duplicate dispatch anyway, but surface a
+        // clear error so the operator knows why.
+        throw new Error(`Meeting ${meetingId} already has an active bot in another organization.`);
+      }
+      console.log(`[Recall] ${orgId} already has a bot for meeting: ${meetingId}`);
+      return existing;
     }
 
     // Build the Zoom URL the way Recall expects (plain join link with pwd query string).
@@ -205,28 +212,30 @@ export class RecallBotManager {
       roomColor,
       botName: cleanBotName,
       connectedAt: new Date(),
+      orgId,
     };
 
     this.botsByMeeting.set(meetingId, botInfo);
     this.meetingsByBot.set(botId, meetingId);
 
-    // Persist a usage record so the eventual billing layer can sum
-    // bot-hours per tenant per month. The status webhook (or our own
-    // disconnect()) closes the row.
+    // Persist a usage record scoped to the org. The status webhook (or
+    // our own disconnect()) closes the row.
     if (this.db) {
       try {
-        const sessionId = this.sessionManager?.current?.id ?? null;
+        let sessionId = null;
+        const entry = this.orgState?.peek(orgId);
+        sessionId = entry?.sm?.current?.id ?? null;
         await this.db.query(
-          `INSERT INTO bot_usage (id, recall_bot_id, meeting_id, session_id)
-           VALUES ($1, $2, $3, $4)`,
-          [randomUUID(), botId, meetingId, sessionId]
+          `INSERT INTO bot_usage (id, recall_bot_id, meeting_id, session_id, org_id, tenant_id)
+           VALUES ($1, $2, $3, $4, $5, COALESCE($5, 'ryteproductions'))`,
+          [randomUUID(), botId, meetingId, sessionId, orgId]
         );
       } catch (err) {
         console.error('[Recall] bot_usage INSERT failed (bot still dispatched):', err.message);
       }
     }
 
-    console.log(`[Recall] Bot ${botId} dispatched to meeting ${meetingId} (${roomName})`);
+    console.log(`[Recall] Bot ${botId} (${orgId}) dispatched to ${meetingId} (${roomName})`);
     return botInfo;
   }
 
@@ -234,11 +243,14 @@ export class RecallBotManager {
    * Ask Recall to have the bot leave the call. Idempotent — safe to
    * call for a meetingId we don't have a bot for.
    */
-  async disconnect(meetingId) {
+  async disconnect(orgId, meetingId) {
     const botInfo = this.botsByMeeting.get(meetingId);
     if (!botInfo) {
       console.log(`[Recall] No bot tracked for meeting: ${meetingId}`);
       return;
+    }
+    if (orgId && botInfo.orgId !== orgId) {
+      throw new Error(`Meeting ${meetingId} does not belong to this organization.`);
     }
 
     const { botId } = botInfo;
@@ -290,17 +302,20 @@ export class RecallBotManager {
   }
 
   /**
-   * Same shape RTMSManager returns so server routes don't need to
-   * branch on which manager they're talking to.
+   * Org-scoped view of active bots. When orgId is omitted, returns all
+   * bots (used by /api/status and operational endpoints, never sent to
+   * an unauthenticated UI).
    */
-  getActiveConnections() {
-    return Array.from(this.botsByMeeting.values()).map((info) => ({
-      meetingId: info.meetingId,
-      roomName: info.roomName,
-      roomColor: info.roomColor,
-      connectedAt: info.connectedAt,
-      isMock: false,
-    }));
+  getActiveConnections(orgId = null) {
+    return Array.from(this.botsByMeeting.values())
+      .filter((info) => !orgId || info.orgId === orgId)
+      .map((info) => ({
+        meetingId: info.meetingId,
+        roomName: info.roomName,
+        roomColor: info.roomColor,
+        connectedAt: info.connectedAt,
+        isMock: false,
+      }));
   }
 
   /**
@@ -309,17 +324,16 @@ export class RecallBotManager {
    * first, with a tolerant fallback). Bot-id lookup is handled here so
    * we can correlate the message back to a room/meeting we know about.
    */
-  handleChatEvent(payload) {
+  async handleChatEvent(payload) {
     const chat = extractChatMessage(payload);
     if (!chat) {
       console.warn(
-        '[Recall] handleChatEvent: no chat body found in payload:',
+        '[Recall] handleChatEvent: no chat body in payload:',
         JSON.stringify(payload).slice(0, 400)
       );
       return;
     }
 
-    // Bot id can live at several levels of the envelope.
     const botId =
       payload?.bot?.id ||
       payload?.bot_id ||
@@ -331,19 +345,25 @@ export class RecallBotManager {
     const meetingId = botId ? this.meetingsByBot.get(botId) || null : null;
     const botInfo = meetingId ? this.botsByMeeting.get(meetingId) : null;
 
-    if (botId && !botInfo) {
-      // Probably a stale webhook for a bot we no longer track (process
-      // restart, manual cleanup). Surface the mismatch but still forward
-      // the message — better an "Unknown Room" entry than a silent drop.
-      console.warn(`[Recall] unknown bot ${botId} — forwarding message without room context`);
+    if (!botInfo) {
+      // Stale webhook for a bot we no longer track (process restart,
+      // manual cleanup). Drop — without orgId we can't route it safely.
+      console.warn(`[Recall] unknown bot ${botId} — dropping message (no org context)`);
+      return;
     }
 
-    this.messageAggregator.addMessage({
+    if (!this.orgState) {
+      console.warn('[Recall] no orgState configured — dropping message');
+      return;
+    }
+
+    const { ma } = await this.orgState.get(botInfo.orgId);
+    await ma.addMessage({
       sender: chat.sender || 'Unknown',
       content: chat.text,
-      room: botInfo?.roomName || 'Unknown Room',
-      roomColor: botInfo?.roomColor || '#ef4444',
-      meetingId: meetingId || botInfo?.meetingId || null,
+      room: botInfo.roomName,
+      roomColor: botInfo.roomColor,
+      meetingId: botInfo.meetingId,
       timestamp: chat.timestamp || new Date().toISOString(),
       type: 'chat',
     });
@@ -430,13 +450,16 @@ export class RecallBotManager {
    * first), if the rate limit is exceeded, or if Recall rejects the
    * send.
    */
-  async sendChatToMeeting(meetingId, text) {
+  async sendChatToMeeting(orgId, meetingId, text) {
     const cleanText = String(text || '').trim();
     if (!cleanText) throw new Error('Message text is required');
 
     const botInfo = this.botsByMeeting.get(meetingId);
     if (!botInfo) {
       throw new Error(`No active bot for meeting ${meetingId} — connect first.`);
+    }
+    if (botInfo.orgId !== orgId) {
+      throw new Error(`Meeting ${meetingId} does not belong to this organization.`);
     }
 
     if (!this._consumeSendToken(botInfo.botId)) {
@@ -457,13 +480,13 @@ export class RecallBotManager {
    * so the UI can surface partial failures (e.g., "sent to 4 of 5
    * meetings, 1 hit rate limit").
    */
-  async broadcastChat(text) {
+  async broadcastChat(orgId, text) {
     const cleanText = String(text || '').trim();
     if (!cleanText) throw new Error('Message text is required');
 
-    const targets = Array.from(this.botsByMeeting.values());
+    const targets = Array.from(this.botsByMeeting.values()).filter(b => b.orgId === orgId);
     if (targets.length === 0) {
-      throw new Error('No active bots — connect to at least one meeting first.');
+      throw new Error('No active bots in this organization — connect to at least one meeting first.');
     }
 
     // Parallel fan-out; each gets its own rate-limit check + audit row.
@@ -531,20 +554,23 @@ export class RecallBotManager {
   async _auditSentMessage({ botInfo, text, isBroadcast }) {
     if (!this.db) return;
     try {
+      const entry = this.orgState?.peek(botInfo.orgId);
+      const sessionId = entry?.sm?.current?.id ?? null;
       await this.db.query(
-        `INSERT INTO sent_messages (id, recall_bot_id, meeting_id, session_id, text, is_broadcast)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO sent_messages
+           (id, recall_bot_id, meeting_id, session_id, text, is_broadcast, org_id, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($7, 'ryteproductions'))`,
         [
           randomUUID(),
           botInfo.botId,
           botInfo.meetingId,
-          this.sessionManager?.current?.id ?? null,
+          sessionId,
           text,
           isBroadcast,
+          botInfo.orgId,
         ]
       );
     } catch (err) {
-      // Audit failure must NOT prevent the user from sending — just log.
       console.error('[Recall] sent_messages audit INSERT failed:', err.message);
     }
   }

@@ -9,15 +9,13 @@ import { dirname, join } from 'path';
 import webhookRoutes from '../routes/webhook.js';
 import authRouter from '../routes/auth.js';
 import { setupSocketHandlers } from './socketHandler.js';
-import { MessageAggregator } from '../services/MessageAggregator.js';
-import { SessionManager } from '../services/SessionManager.js';
 import { RosterManager } from '../services/RosterManager.js';
+import { OrgState } from '../services/OrgState.js';
 import { RTMSManager } from '../rtms/RTMSManager.js';
 import { RecallBotManager } from '../recall/RecallBotManager.js';
 import { initDatabase } from '../db/index.js';
-import { attachUser } from '../auth/middleware.js';
+import { attachUser, requireAuth } from '../auth/middleware.js';
 
-// Load environment variables
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,95 +24,68 @@ const __dirname = dirname(__filename);
 const app = express();
 const httpServer = createServer(app);
 
-// Initialize Socket.io
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.NODE_ENV === 'production'
-      ? true  // Allow same-origin in production
+      ? true
       : ['http://localhost:5173', 'http://localhost:3000'],
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
 });
 
-// Initialize message aggregator + session manager. The DB connection and
-// session hydration happen asynchronously in start() below; the
-// aggregator's `db` and `sessionManager` fields get patched in once
-// they're ready. addMessage() guards on those being present, so messages
-// arriving during the brief startup window are still served live —
-// they just won't be persisted (and will fall out of the in-memory ring
-// when 500 newer ones arrive).
-const messageAggregator = new MessageAggregator(io);
-const sessionManager = new SessionManager({ io });
+// Singletons that aren't per-org:
+//   - rosterManager (CRUD layer; orgId passed per-call)
+//   - recallBotManager (one Recall workspace, bot records carry orgId)
+//   - rtmsManager (legacy fallback; kept alive for the unused Zoom webhook path)
+//   - orgState (lazy per-org MessageAggregator + SessionManager)
 const rosterManager = new RosterManager();
-
-// Initialize RTMS manager (legacy / mock fallback)
-const rtmsManager = new RTMSManager(messageAggregator);
-
-// Initialize Recall.ai bot manager. Active only when both RECALL_API_KEY
-// and PUBLIC_WEBHOOK_URL are configured; otherwise we fall back to RTMS.
-// db + sessionManager are wired in below (after async DB init) so
-// bot-usage rows can be persisted for billing.
+const rtmsManager = new RTMSManager();
 const recallBotManager = new RecallBotManager({
-  messageAggregator,
   apiKey: process.env.RECALL_API_KEY,
   apiBase: process.env.RECALL_API_BASE,
   publicWebhookUrl: process.env.PUBLIC_WEBHOOK_URL,
 });
 const useRecall = recallBotManager.isConfigured();
+const orgState = new OrgState({ io });
 
-// Make managers available to routes
-app.set('messageAggregator', messageAggregator);
-app.set('sessionManager', sessionManager);
 app.set('rosterManager', rosterManager);
 app.set('rtmsManager', rtmsManager);
 app.set('recallBotManager', recallBotManager);
+app.set('orgState', orgState);
 app.set('io', io);
 
-// Middleware
+// ---- Middleware ----
 app.use(cors({
-  // Auth cookies need credentials; same-origin in production. In dev, the
-  // Vite proxy keeps everything same-origin so this just permissively
-  // mirrors the request origin.
   origin: process.env.NODE_ENV === 'production'
     ? true
     : ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true,
 }));
 app.use(cookieParser());
-// Capture the raw request body alongside parsed JSON so webhook handlers
-// can verify HMAC signatures over the exact bytes the sender signed.
 app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
 });
 
-// Attach req.user / req.org if a valid session cookie is present.
-// Phase 1: soft auth only — existing routes still work unauthenticated.
-// Phase 2 will add requireAuth on the gated routes.
+// Soft-attach req.user / req.org if a valid session cookie is present.
 app.use((req, res, next) => {
   const db = app.get('db');
   if (!db) return next();
   return attachUser(db)(req, res, next);
 });
 
-// Health check endpoint
+// ---- Public routes (no auth) ----
+
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    rooms: messageAggregator.getStats()
-  });
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Operational status — confirms which capture path is live and how it's
-// configured. Useful for verifying a Railway redeploy picked up env vars
-// without having to dig through logs.
 app.get('/api/status', (req, res) => {
   res.json({
     botPath: useRecall ? 'recall' : 'rtms-mock',
@@ -132,20 +103,31 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// Webhook routes (HMAC-verified, never authenticated by user session)
+// Webhook routes (HMAC-verified, never user-authenticated)
 app.use('/webhook', webhookRoutes);
 
 // Auth routes (signup, login, logout, /me, verify-email, password-reset)
 app.use('/api/auth', authRouter());
 
-// ============================================
-// MEETING CONNECTION API ENDPOINTS
-// ============================================
+// ---- Authenticated /api/* routes ----
+//
+// Everything below this line requires a valid session AND uses req.org.id
+// for org isolation. Per-org runtime state comes from
+// `await orgState.get(req.org.id)`.
 
-// Get list of connected meetings
-app.get('/api/meetings', (req, res) => {
-  const manager = useRecall ? recallBotManager : rtmsManager;
-  const connections = manager.getActiveConnections();
+app.use('/api', requireAuth);
+
+// Helper to grab the requesting user's org state on demand.
+async function org(req) {
+  return orgState.get(req.org.id);
+}
+
+// ---- Meetings ----
+
+app.get('/api/meetings', async (req, res) => {
+  const connections = useRecall
+    ? recallBotManager.getActiveConnections(req.org.id)
+    : rtmsManager.getActiveConnections();
   res.json({
     meetings: connections.map(conn => ({
       id: conn.meetingId,
@@ -153,95 +135,74 @@ app.get('/api/meetings', (req, res) => {
       roomName: conn.roomName,
       status: 'connected',
       isMock: conn.isMock,
-      connectedAt: conn.connectedAt
-    }))
+      connectedAt: conn.connectedAt,
+    })),
   });
 });
 
-// Connect to a meeting
 app.post('/api/meetings/connect', async (req, res) => {
   const { meetingId, passcode, roomName, roomColor, botName } = req.body;
-
-  if (!meetingId) {
-    return res.status(400).json({ error: 'Meeting ID is required' });
-  }
+  if (!meetingId) return res.status(400).json({ error: 'Meeting ID is required' });
   if (useRecall && (!botName || !String(botName).trim())) {
     return res.status(400).json({
-      error: 'Bot Display Name is required — this is how the bot will appear to participants in the meeting.',
+      error: 'Bot Display Name is required — this is how the bot will appear to participants.',
     });
   }
 
-  // Clean up meeting ID (remove spaces and dashes)
   const cleanMeetingId = meetingId.replace(/[\s-]/g, '');
   const finalRoomName = roomName || `Meeting ${cleanMeetingId}`;
   const finalRoomColor = roomColor || '#ef4444';
 
   try {
-    // Route through Recall when configured; otherwise use the existing RTMS path.
+    const { ma } = await org(req);
     if (useRecall) {
-      await recallBotManager.connect(cleanMeetingId, passcode, finalRoomName, finalRoomColor, botName);
+      // RecallBotManager needs orgState wired so handleChatEvent can
+      // route inbound webhooks to the right org's MA.
+      recallBotManager.orgState = orgState;
+      recallBotManager.db = app.get('db');
+      await recallBotManager.connect(req.org.id, cleanMeetingId, passcode, finalRoomName, finalRoomColor, botName);
     } else {
       await rtmsManager.connect(cleanMeetingId, null, finalRoomName, finalRoomColor);
     }
 
-    // Add room to message aggregator
-    messageAggregator.addRoom({
+    ma.addRoom({
       id: cleanMeetingId,
       name: finalRoomName,
       color: finalRoomColor,
-      participantCount: 0
+      participantCount: 0,
     });
 
     const isMock = useRecall ? false : rtmsManager.useMockMode;
-
-    // Notify clients
-    io.emit('meetingConnected', {
+    io.to(`org:${req.org.id}`).emit('meetingConnected', {
       id: cleanMeetingId,
       meetingId: cleanMeetingId,
       roomName: finalRoomName,
       roomColor: finalRoomColor,
       status: 'connected',
-      isMock
+      isMock,
     });
 
-    let message;
-    if (useRecall) {
-      message = 'Bot dispatched to meeting via Recall.ai';
-    } else if (rtmsManager.useMockMode) {
-      message = 'Connected in mock mode (RTMS not available)';
-    } else {
-      message = 'Connected to meeting stream';
-    }
-
-    res.json({
-      success: true,
-      id: cleanMeetingId,
-      message,
-      isMock
-    });
+    const message = useRecall
+      ? 'Bot dispatched to meeting via Recall.ai'
+      : (rtmsManager.useMockMode ? 'Connected in mock mode' : 'Connected to meeting stream');
+    res.json({ success: true, id: cleanMeetingId, message, isMock });
   } catch (error) {
     console.error('Failed to connect to meeting:', error);
     res.status(500).json({ error: error.message || 'Failed to connect to meeting' });
   }
 });
 
-// Disconnect from a meeting
 app.post('/api/meetings/:id/disconnect', async (req, res) => {
   const { id } = req.params;
-
   try {
+    const { ma } = await org(req);
     if (useRecall) {
-      await recallBotManager.disconnect(id);
+      await recallBotManager.disconnect(req.org.id, id);
     } else {
       rtmsManager.disconnect(id);
     }
-
-    // Remove room from message aggregator
-    messageAggregator.removeRoom(id);
-
-    // Notify clients
-    io.emit('meetingDisconnected', { id });
-
+    ma.removeRoom(id);
+    io.to(`org:${req.org.id}`).emit('meetingDisconnected', { id });
     res.json({ success: true, message: 'Disconnected from meeting' });
   } catch (error) {
     console.error('Failed to disconnect from meeting:', error);
@@ -249,23 +210,21 @@ app.post('/api/meetings/:id/disconnect', async (req, res) => {
   }
 });
 
-// ============================================
-// SESSIONS + SAVED MESSAGES
-// ============================================
+// ---- Sessions ----
 
-// Current session info (always returns a session — server auto-starts one).
-app.get('/api/sessions/current', (req, res) => {
-  res.json({ session: sessionManager.getCurrent() });
+app.get('/api/sessions/current', async (req, res) => {
+  const { sm } = await org(req);
+  res.json({ session: sm.getCurrent() });
 });
 
-// Rename the current session. Body: { name }.
 app.patch('/api/sessions/current', async (req, res) => {
   const name = req.body?.name;
   if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'name is required' });
   }
   try {
-    const session = await sessionManager.rename(name);
+    const { sm } = await org(req);
+    const session = await sm.rename(name);
     res.json({ session });
   } catch (err) {
     console.error('PATCH /api/sessions/current failed:', err);
@@ -273,11 +232,10 @@ app.patch('/api/sessions/current', async (req, res) => {
   }
 });
 
-// Full list of sessions, most recent first, with message counts. Lets a
-// future UI browse past events.
 app.get('/api/sessions', async (req, res) => {
   try {
-    const sessions = await sessionManager.list({ limit: 100 });
+    const { sm } = await org(req);
+    const sessions = await sm.list({ limit: 100 });
     res.json({ sessions });
   } catch (err) {
     console.error('GET /api/sessions failed:', err);
@@ -285,15 +243,11 @@ app.get('/api/sessions', async (req, res) => {
   }
 });
 
-// End the current session (closes its log) and immediately start a new
-// one. The new session's name can be supplied; otherwise a date-stamped
-// default is used.
 app.post('/api/sessions/end', async (req, res) => {
   try {
-    const newSession = await sessionManager.end({ newSessionName: req.body?.newSessionName });
-    // Reset the in-memory ring buffer for the new session — clients
-    // will see a fresh feed when they subscribe again.
-    messageAggregator.clearMessages();
+    const { sm, ma } = await org(req);
+    const newSession = await sm.end({ newSessionName: req.body?.newSessionName });
+    ma.clearMessages();
     res.json({ session: newSession });
   } catch (err) {
     console.error('POST /api/sessions/end failed:', err);
@@ -301,12 +255,14 @@ app.post('/api/sessions/end', async (req, res) => {
   }
 });
 
-// Mark a message as saved (with optional one-line note).
+// ---- Saved messages ----
+
 app.post('/api/messages/:id/save', async (req, res) => {
   const { id } = req.params;
   const note = req.body?.note ?? null;
   try {
-    const message = await messageAggregator.setSaved(id, true, note);
+    const { ma } = await org(req);
+    const message = await ma.setSaved(id, true, note);
     if (!message) return res.status(404).json({ error: 'Message not found' });
     res.json({ message });
   } catch (err) {
@@ -315,11 +271,11 @@ app.post('/api/messages/:id/save', async (req, res) => {
   }
 });
 
-// Unmark a saved message.
 app.delete('/api/messages/:id/save', async (req, res) => {
   const { id } = req.params;
   try {
-    const message = await messageAggregator.setSaved(id, false, null);
+    const { ma } = await org(req);
+    const message = await ma.setSaved(id, false, null);
     if (!message) return res.status(404).json({ error: 'Message not found' });
     res.json({ message });
   } catch (err) {
@@ -328,11 +284,11 @@ app.delete('/api/messages/:id/save', async (req, res) => {
   }
 });
 
-// All saved messages for the given session (defaults to current).
 app.get('/api/saved', async (req, res) => {
   const sessionId = req.query.session_id || undefined;
   try {
-    const messages = await messageAggregator.getSavedMessages({ sessionId });
+    const { ma } = await org(req);
+    const messages = await ma.getSavedMessages({ sessionId });
     res.json({ messages });
   } catch (err) {
     console.error('GET /api/saved failed:', err);
@@ -340,24 +296,16 @@ app.get('/api/saved', async (req, res) => {
   }
 });
 
-// CSV export of saved messages — operators paste straight into a sheet.
 app.get('/api/saved/export.csv', async (req, res) => {
   const sessionId = req.query.session_id || undefined;
   try {
-    const messages = await messageAggregator.getSavedMessages({ sessionId });
+    const { ma } = await org(req);
+    const messages = await ma.getSavedMessages({ sessionId });
     const rows = [
       ['timestamp', 'room', 'sender', 'content', 'note'],
-      ...messages.map(m => [
-        m.timestamp,
-        m.room,
-        m.sender,
-        m.content,
-        m.note || '',
-      ]),
+      ...messages.map(m => [m.timestamp, m.room, m.sender, m.content, m.note || '']),
     ];
-    const csv = rows
-      .map(row => row.map(csvEscape).join(','))
-      .join('\n');
+    const csv = rows.map(row => row.map(csvEscape).join(',')).join('\n');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="zoomchat-saved.csv"');
     res.send(csv);
@@ -370,19 +318,12 @@ app.get('/api/saved/export.csv', async (req, res) => {
 function csvEscape(value) {
   if (value == null) return '';
   const s = String(value);
-  if (/[",\n\r]/.test(s)) {
-    return '"' + s.replace(/"/g, '""') + '"';
-  }
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
   return s;
 }
 
-// ============================================
-// OUTBOUND CHAT: operator reply to a room, or broadcast to all rooms
-// ============================================
+// ---- Outbound chat ----
 
-// Reply into a single meeting via its bot. Body: { text }.
-// Only meaningful when Recall is the active path; mock-mode RTMS
-// doesn't have a real bot to send through.
 app.post('/api/meetings/:meetingId/reply', async (req, res) => {
   if (!useRecall) {
     return res.status(503).json({ error: 'Sending chat requires the Recall path (currently in mock mode).' });
@@ -390,15 +331,11 @@ app.post('/api/meetings/:meetingId/reply', async (req, res) => {
   const { meetingId } = req.params;
   const text = req.body?.text;
   try {
-    const result = await recallBotManager.sendChatToMeeting(meetingId, text);
-
-    // Append to the live feed so the operator has persistent evidence
-    // of what they sent. Dedupe in MessageAggregator handles the case
-    // where Recall later echoes the bot's own message back via the
-    // chat webhook.
+    const { ma } = await org(req);
+    const result = await recallBotManager.sendChatToMeeting(req.org.id, meetingId, text);
     const botInfo = recallBotManager.botsByMeeting.get(meetingId);
     if (botInfo) {
-      await messageAggregator.addMessage({
+      await ma.addMessage({
         sender: botInfo.botName,
         content: text,
         room: botInfo.roomName,
@@ -408,33 +345,59 @@ app.post('/api/meetings/:meetingId/reply', async (req, res) => {
         type: 'reply',
       });
     }
-
     res.json({ success: true, ...result });
   } catch (err) {
     console.error(`POST /api/meetings/${meetingId}/reply failed:`, err.message);
-    // Rate-limit and "no bot" errors are 400/429 not 500.
     const status = /rate limit/i.test(err.message)
       ? 429
-      : /no active bot/i.test(err.message) || /required/i.test(err.message)
+      : /no active bot|does not belong|required/i.test(err.message)
         ? 400
         : 500;
     res.status(status).json({ error: err.message });
   }
 });
 
-// ============================================
-// ROSTERS — pre-built lists of meetings the operator can deploy in
-// one click. Saves typing meeting IDs/passcodes/bot names for every
-// recurring event, and makes quit-and-rejoin a single button press.
-// ============================================
+app.post('/api/broadcast', async (req, res) => {
+  if (!useRecall) {
+    return res.status(503).json({ error: 'Broadcast requires the Recall path (currently in mock mode).' });
+  }
+  const text = req.body?.text;
+  try {
+    const { ma } = await org(req);
+    const results = await recallBotManager.broadcastChat(req.org.id, text);
+    for (const r of results) {
+      if (!r.ok) continue;
+      const botInfo = recallBotManager.botsByMeeting.get(r.meetingId);
+      if (!botInfo) continue;
+      await ma.addMessage({
+        sender: botInfo.botName,
+        content: text,
+        room: botInfo.roomName,
+        roomColor: botInfo.roomColor,
+        meetingId: r.meetingId,
+        timestamp: new Date().toISOString(),
+        type: 'broadcast',
+      });
+    }
+    res.json({
+      success: true,
+      sent: results.filter(r => r.ok).length,
+      failed: results.filter(r => !r.ok).length,
+      results,
+    });
+  } catch (err) {
+    console.error('POST /api/broadcast failed:', err.message);
+    res.status(/no active bots|required/i.test(err.message) ? 400 : 500)
+       .json({ error: err.message });
+  }
+});
+
+// ---- Rosters ----
 
 app.get('/api/rosters', async (req, res) => {
-  if (!rosterManager.isAvailable()) {
-    return res.json({ rosters: [] });
-  }
+  if (!rosterManager.isAvailable()) return res.json({ rosters: [] });
   try {
-    const rosters = await rosterManager.list();
-    res.json({ rosters });
+    res.json({ rosters: await rosterManager.list(req.org.id) });
   } catch (err) {
     console.error('GET /api/rosters failed:', err);
     res.status(500).json({ error: err.message });
@@ -443,7 +406,7 @@ app.get('/api/rosters', async (req, res) => {
 
 app.get('/api/rosters/:id', async (req, res) => {
   try {
-    const roster = await rosterManager.get(req.params.id);
+    const roster = await rosterManager.get(req.org.id, req.params.id);
     if (!roster) return res.status(404).json({ error: 'Roster not found' });
     res.json({ roster });
   } catch (err) {
@@ -454,12 +417,12 @@ app.get('/api/rosters/:id', async (req, res) => {
 
 app.post('/api/rosters', async (req, res) => {
   if (!rosterManager.isAvailable()) {
-    return res.status(503).json({ error: 'Roster storage requires the database (set DATABASE_URL).' });
+    return res.status(503).json({ error: 'Roster storage requires the database.' });
   }
   const { name, entries = [] } = req.body || {};
   try {
     rosterManager.validateEntries(entries);
-    const roster = await rosterManager.create({ name, entries });
+    const roster = await rosterManager.create(req.org.id, { name, entries });
     res.status(201).json({ roster });
   } catch (err) {
     console.error('POST /api/rosters failed:', err);
@@ -475,7 +438,7 @@ app.patch('/api/rosters/:id', async (req, res) => {
   const { name, entries } = req.body || {};
   try {
     if (Array.isArray(entries)) rosterManager.validateEntries(entries);
-    const roster = await rosterManager.update(req.params.id, { name, entries });
+    const roster = await rosterManager.update(req.org.id, req.params.id, { name, entries });
     if (!roster) return res.status(404).json({ error: 'Roster not found' });
     res.json({ roster });
   } catch (err) {
@@ -490,7 +453,7 @@ app.delete('/api/rosters/:id', async (req, res) => {
     return res.status(503).json({ error: 'Roster storage requires the database.' });
   }
   try {
-    const removed = await rosterManager.delete(req.params.id);
+    const removed = await rosterManager.delete(req.org.id, req.params.id);
     if (!removed) return res.status(404).json({ error: 'Roster not found' });
     res.json({ success: true });
   } catch (err) {
@@ -499,42 +462,38 @@ app.delete('/api/rosters/:id', async (req, res) => {
   }
 });
 
-/**
- * One-click deploy: fetches the roster, dispatches a bot for each
- * entry in parallel via the existing Recall path. Returns per-entry
- * success/failure so the UI can show "4 of 5 connected, 1 failed: <error>".
- *
- * Already-connected meetings (operator deployed twice or manually
- * connected first) hit RecallBotManager.connect's dedup and are
- * reported as ok=true (no new bot dispatched, no duplicate Recall cost).
- */
 app.post('/api/rosters/:id/deploy', async (req, res) => {
   if (!useRecall) {
     return res.status(503).json({ error: 'Deploy requires the Recall path (currently in mock mode).' });
   }
   try {
-    const roster = await rosterManager.get(req.params.id);
+    const { ma } = await org(req);
+    const roster = await rosterManager.get(req.org.id, req.params.id);
     if (!roster) return res.status(404).json({ error: 'Roster not found' });
     if (roster.entries.length === 0) {
       return res.status(400).json({ error: 'Roster has no meetings to deploy' });
     }
 
+    recallBotManager.orgState = orgState;
+    recallBotManager.db = app.get('db');
+
     const results = await Promise.allSettled(
       roster.entries.map(async (entry) => {
         await recallBotManager.connect(
+          req.org.id,
           entry.meeting_id,
           entry.passcode,
           entry.room_name,
           entry.room_color,
           entry.bot_name
         );
-        messageAggregator.addRoom({
+        ma.addRoom({
           id: entry.meeting_id,
           name: entry.room_name,
           color: entry.room_color,
           participantCount: 0,
         });
-        io.emit('meetingConnected', {
+        io.to(`org:${req.org.id}`).emit('meetingConnected', {
           id: entry.meeting_id,
           meetingId: entry.meeting_id,
           roomName: entry.room_name,
@@ -552,7 +511,6 @@ app.post('/api/rosters/:id/deploy', async (req, res) => {
       ok: r.status === 'fulfilled',
       error: r.status === 'rejected' ? (r.reason?.message || String(r.reason)) : null,
     }));
-
     res.json({
       total: roster.entries.length,
       succeeded: detailed.filter(d => d.ok).length,
@@ -565,95 +523,8 @@ app.post('/api/rosters/:id/deploy', async (req, res) => {
   }
 });
 
-// Broadcast the same text to every active bot. Body: { text }.
-app.post('/api/broadcast', async (req, res) => {
-  if (!useRecall) {
-    return res.status(503).json({ error: 'Broadcast requires the Recall path (currently in mock mode).' });
-  }
-  const text = req.body?.text;
-  try {
-    const results = await recallBotManager.broadcastChat(text);
+// ---- Static client ----
 
-    // For each successful per-room send, append an outgoing message to
-    // that room's feed so the operator has a persistent record of what
-    // went where.
-    for (const r of results) {
-      if (!r.ok) continue;
-      const botInfo = recallBotManager.botsByMeeting.get(r.meetingId);
-      if (!botInfo) continue;
-      await messageAggregator.addMessage({
-        sender: botInfo.botName,
-        content: text,
-        room: botInfo.roomName,
-        roomColor: botInfo.roomColor,
-        meetingId: r.meetingId,
-        timestamp: new Date().toISOString(),
-        type: 'broadcast',
-      });
-    }
-
-    res.json({
-      success: true,
-      sent: results.filter(r => r.ok).length,
-      failed: results.filter(r => !r.ok).length,
-      results,
-    });
-  } catch (err) {
-    console.error('POST /api/broadcast failed:', err.message);
-    res.status(/no active bots|required/i.test(err.message) ? 400 : 500)
-       .json({ error: err.message });
-  }
-});
-
-// ============================================
-// DEVELOPMENT/TESTING ENDPOINTS
-// These let you test without actual Zoom connection
-// ============================================
-
-// Simulate adding a chat message (for testing)
-app.post('/dev/message', (req, res) => {
-  const { sender, content, room } = req.body;
-
-  if (!sender || !content) {
-    return res.status(400).json({ error: 'sender and content required' });
-  }
-
-  messageAggregator.addMessage({
-    sender: sender || 'Test User',
-    content: content,
-    room: room || 'Test Room',
-    timestamp: new Date().toISOString()
-  });
-
-  res.json({ success: true, message: 'Message added' });
-});
-
-// Simulate a room joining
-app.post('/dev/room', (req, res) => {
-  const { roomName, meetingId } = req.body;
-
-  messageAggregator.addRoom({
-    id: meetingId || `test-${Date.now()}`,
-    name: roomName || 'Test Room',
-    participantCount: Math.floor(Math.random() * 20) + 1
-  });
-
-  res.json({ success: true, message: 'Room added' });
-});
-
-// Get current state (for debugging)
-app.get('/dev/state', (req, res) => {
-  res.json({
-    messages: messageAggregator.getRecentMessages(50),
-    stats: messageAggregator.getStats(),
-    rooms: messageAggregator.getRooms()
-  });
-});
-
-// Setup Socket.io handlers
-setupSocketHandlers(io, messageAggregator, rtmsManager);
-
-// Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(join(__dirname, '../../client/dist')));
   app.get('*', (req, res) => {
@@ -661,54 +532,34 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-// Start server. Async wrapper so we can await DB + session init before
-// taking traffic — that way the very first message of a session lands
-// in the DB instead of falling through the persistence gap.
 const PORT = process.env.PORT || 3001;
 
 async function start() {
-  // 1. Connect to Postgres (optional — falls back to in-memory only).
   const db = await initDatabase({ databaseUrl: process.env.DATABASE_URL });
-  messageAggregator.db = db;
-  sessionManager.db = db;
-  // RecallBotManager uses db+sessionManager for bot_usage tracking
-  // (groundwork for SaaS billing — see docs/MONETIZATION-PLAN.md).
-  recallBotManager.db = db;
-  recallBotManager.sessionManager = sessionManager;
-  rosterManager.db = db;
-  // Expose db to route handlers (auth router needs it).
   app.set('db', db);
+  orgState.db = db;
+  rosterManager.db = db;
+  recallBotManager.db = db;
+  recallBotManager.orgState = orgState;
 
-  // 2. Reopen the most recent un-ended session, or create a new one.
-  await sessionManager.init();
-  messageAggregator.sessionManager = sessionManager;
+  // Register Socket.io handlers now that `db` is available (the auth
+  // middleware needs it on every handshake).
+  setupSocketHandlers(io, { db, orgState });
 
-  // 3. Hydrate the in-memory ring buffer from this session's history.
-  await messageAggregator.hydrate();
-
-  // 4. Start listening.
   httpServer.listen(PORT, () => {
-    const botPath = useRecall ? 'Recall.ai' : `RTMS (${rtmsManager.useMockMode ? 'mock mode' : 'live'})`;
+    const botPath = useRecall ? 'Recall.ai' : `RTMS (${rtmsManager.useMockMode ? 'mock' : 'live'})`;
     const persistence = db ? 'Postgres' : 'in-memory only';
-    const session = sessionManager.getCurrent();
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║         Zoom Chat Aggregator Server Started!               ║
+║         Zoom Chat Aggregator — Phase 2                     ║
 ╠════════════════════════════════════════════════════════════╣
-║  Server running on: http://localhost:${PORT}                   ║
-║  Webhook endpoint:  http://localhost:${PORT}/webhook/zoom      ║
-║  Health check:      http://localhost:${PORT}/health            ║
-║  Bot path:          ${botPath.padEnd(40)}║
-║  Persistence:       ${persistence.padEnd(40)}║
-║  Session:           ${(session?.name || 'none').padEnd(40)}║
-╠════════════════════════════════════════════════════════════╣
-║  Development endpoints:                                    ║
-║  POST /dev/message  - Add test message                     ║
-║  POST /dev/room     - Add test room                        ║
-║  GET  /dev/state    - View current state                   ║
+║  Server:        http://localhost:${PORT}                       ║
+║  Health:        http://localhost:${PORT}/health                ║
+║  Bot path:      ${botPath.padEnd(44)}║
+║  Persistence:   ${persistence.padEnd(44)}║
+║  Auth:          required on /api/* (except /api/auth/*)    ║
 ╚════════════════════════════════════════════════════════════╝
     `);
-    console.log(`[BotManager] Active path: ${botPath}`);
   });
 }
 
@@ -717,4 +568,4 @@ start().catch((err) => {
   process.exit(1);
 });
 
-export { app, io, messageAggregator, sessionManager };
+export { app, io };

@@ -1,142 +1,113 @@
+import cookie from 'cookie';
+import { COOKIE_NAME, validateSession } from '../auth/sessions.js';
+
 /**
- * Socket.io event handlers for real-time client communication
+ * Socket.io setup: auth gate + per-org room subscription + moderation
+ * state that's namespaced by org.
+ *
+ * Auth: on connect, parse the session cookie out of the handshake
+ * headers and validate it. Reject connections without a valid session.
+ *
+ * Org isolation: each socket auto-joins `org:<id>` so emits like
+ * `io.to('org:<id>').emit('newMessage', m)` reach only that org's
+ * connected clients. Meeting-room subscriptions are namespaced by org
+ * too (`org:<id>:room:<meetingId>`) to prevent collisions.
+ *
+ * Moderation state (featured message / highlight list / queue) is now
+ * per-org. Each org sees its own.
  */
 
-// Moderation state (shared across all clients)
-let moderationState = {
-  highlightedIds: [],
-  queue: [],
-  featuredMessage: null
-};
+const moderationStateByOrg = new Map();
+function getModerationState(orgId) {
+  if (!moderationStateByOrg.has(orgId)) {
+    moderationStateByOrg.set(orgId, {
+      highlightedIds: [],
+      queue: [],
+      featuredMessage: null,
+    });
+  }
+  return moderationStateByOrg.get(orgId);
+}
 
-export function setupSocketHandlers(io, messageAggregator, rtmsManager = null) {
-  io.on('connection', (socket) => {
-    console.log(`Client connected: ${socket.id}`);
+export function setupSocketHandlers(io, { db, orgState }) {
+  // ---- Auth middleware ----
+  io.use(async (socket, next) => {
+    if (!db) return next(new Error('Server not configured for sessions'));
+    try {
+      const rawCookie = socket.handshake.headers.cookie || '';
+      const cookies = cookie.parse(rawCookie);
+      const sessionId = cookies[COOKIE_NAME];
+      if (!sessionId) return next(new Error('Not signed in'));
+      const session = await validateSession(db, sessionId);
+      if (!session) return next(new Error('Session expired'));
+      socket.data.user = session.user;
+      socket.data.org = session.org;
+      return next();
+    } catch (err) {
+      console.error('[socket auth] error:', err.message);
+      return next(new Error('Auth check failed'));
+    }
+  });
 
-    // Send initial state to new client
+  io.on('connection', async (socket) => {
+    const orgId = socket.data.org.id;
+    socket.join(`org:${orgId}`);
+    console.log(`[socket] connected ${socket.id} as ${socket.data.user.email} (${orgId})`);
+
+    // Hydrate this client with its org's state.
+    let entry;
+    try {
+      entry = await orgState.get(orgId);
+    } catch (err) {
+      console.error(`[socket] failed to init org state for ${orgId}:`, err);
+      socket.emit('serverError', { error: 'Failed to load workspace' });
+      return;
+    }
+    const { ma } = entry;
+
     socket.emit('initialState', {
-      messages: messageAggregator.getRecentMessages(100),
-      rooms: messageAggregator.getRooms(),
-      stats: messageAggregator.getStats()
+      messages: ma.getRecentMessages(100),
+      rooms: ma.getRooms(),
+      stats: ma.getStats(),
     });
 
-    // Handle client requesting message history
     socket.on('getHistory', (options = {}) => {
       const { limit = 100, room = null } = options;
-      const messages = room
-        ? messageAggregator.getMessagesByRoom(room, limit)
-        : messageAggregator.getRecentMessages(limit);
-
+      const messages = room ? ma.getMessagesByRoom(room, limit) : ma.getRecentMessages(limit);
       socket.emit('history', { messages });
     });
 
-    // Handle client requesting room list
     socket.on('getRooms', () => {
-      socket.emit('rooms', { rooms: messageAggregator.getRooms() });
+      socket.emit('rooms', { rooms: ma.getRooms() });
     });
 
-    // Handle client requesting stats
     socket.on('getStats', () => {
-      socket.emit('stats', { stats: messageAggregator.getStats() });
+      socket.emit('stats', { stats: ma.getStats() });
     });
 
-    // Handle room filter subscription
+    // Per-org room subscriptions are namespaced so meeting-id collisions
+    // across orgs can never cross-contaminate.
     socket.on('subscribeToRoom', (roomId) => {
-      socket.join(`room:${roomId}`);
-      console.log(`Client ${socket.id} subscribed to room: ${roomId}`);
+      socket.join(`org:${orgId}:room:${roomId}`);
     });
-
     socket.on('unsubscribeFromRoom', (roomId) => {
-      socket.leave(`room:${roomId}`);
-      console.log(`Client ${socket.id} unsubscribed from room: ${roomId}`);
+      socket.leave(`org:${orgId}:room:${roomId}`);
     });
 
-    // Handle meeting connection request from client
-    socket.on('connectToMeeting', async ({ meetingId, passcode, roomName }) => {
-      if (!rtmsManager) {
-        socket.emit('meetingError', { error: 'RTMS manager not available' });
-        return;
-      }
-
-      try {
-        await rtmsManager.connect(meetingId, null, roomName || `Meeting ${meetingId}`);
-
-        messageAggregator.addRoom({
-          id: meetingId,
-          name: roomName || `Meeting ${meetingId}`,
-          participantCount: 0
-        });
-
-        io.emit('meetingConnected', {
-          id: meetingId,
-          meetingId,
-          roomName: roomName || `Meeting ${meetingId}`,
-          status: 'connected',
-          isMock: rtmsManager.useMockMode
-        });
-      } catch (error) {
-        socket.emit('meetingError', { error: error.message });
-      }
-    });
-
-    // Handle meeting disconnect request
-    socket.on('disconnectFromMeeting', (meetingId) => {
-      if (!rtmsManager) return;
-
-      rtmsManager.disconnect(meetingId);
-      messageAggregator.removeRoom(meetingId);
-      io.emit('meetingDisconnected', { id: meetingId });
-    });
-
-    // Get connected meetings
-    socket.on('getConnectedMeetings', () => {
-      if (!rtmsManager) {
-        socket.emit('connectedMeetings', { meetings: [] });
-        return;
-      }
-
-      const connections = rtmsManager.getActiveConnections();
-      socket.emit('connectedMeetings', {
-        meetings: connections.map(conn => ({
-          id: conn.meetingId,
-          meetingId: conn.meetingId,
-          roomName: conn.roomName,
-          status: 'connected',
-          isMock: conn.isMock
-        }))
-      });
-    });
-
-    // ============================================
-    // MODERATION HANDLERS
-    // ============================================
-
-    // Get current moderation state
+    // ---- Moderation (per-org) ----
     socket.on('getModerationState', () => {
-      socket.emit('moderationState', moderationState);
+      socket.emit('moderationState', getModerationState(orgId));
     });
-
-    // Handle moderation updates (broadcast to all clients)
     socket.on('moderationUpdate', (update) => {
-      // Update server state
-      if (update.highlightedIds !== undefined) {
-        moderationState.highlightedIds = update.highlightedIds;
-      }
-      if (update.queue !== undefined) {
-        moderationState.queue = update.queue;
-      }
-      if (update.featuredMessage !== undefined) {
-        moderationState.featuredMessage = update.featuredMessage;
-      }
-
-      // Broadcast to all clients (including sender for consistency)
-      io.emit('moderationUpdate', update);
-      console.log('Moderation update:', Object.keys(update).join(', '));
+      const state = getModerationState(orgId);
+      if (update.highlightedIds !== undefined) state.highlightedIds = update.highlightedIds;
+      if (update.queue !== undefined) state.queue = update.queue;
+      if (update.featuredMessage !== undefined) state.featuredMessage = update.featuredMessage;
+      io.to(`org:${orgId}`).emit('moderationUpdate', update);
     });
 
-    // Handle disconnect
     socket.on('disconnect', () => {
-      console.log(`Client disconnected: ${socket.id}`);
+      console.log(`[socket] disconnected ${socket.id} (${socket.data.user.email})`);
     });
   });
 }

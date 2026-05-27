@@ -1,25 +1,40 @@
 import { v4 as uuidv4 } from 'uuid';
 
 /**
- * Aggregates chat messages from multiple Zoom meeting rooms into a
- * unified stream and persists them to Postgres (via the optional db +
+ * Aggregates chat messages from one org's meeting rooms into a unified
+ * stream and persists them to Postgres (via the optional db +
  * sessionManager dependencies). The in-memory ring buffer is kept so
  * real-time clients can read the recent timeline cheaply; the DB is
  * the source of truth for save/export and post-event browsing.
+ *
+ * Scoping (Phase 2): one MessageAggregator per org. Construct with
+ * { orgId } so DB writes carry the org tag and socket emits go to the
+ * org's room only (`io.to('org:<id>').emit(...)`). Two customers on the
+ * same server can never see each other's chat.
  */
 export class MessageAggregator {
-  constructor(io, { db, sessionManager } = {}) {
+  constructor(io, { db, sessionManager, orgId } = {}) {
     this.io = io;
     this.db = db || null;
     this.sessionManager = sessionManager || null;
+    this.orgId = orgId || null;
     this.messages = [];
     this.rooms = new Map();
-    this.maxMessages = 500; // Ring buffer size (in-memory)
+    this.maxMessages = 500;
+  }
+
+  get roomName() {
+    return this.orgId ? `org:${this.orgId}` : null;
+  }
+
+  _emit(event, payload) {
+    if (this.roomName) this.io.to(this.roomName).emit(event, payload);
+    else this.io.emit(event, payload);
   }
 
   /**
-   * Hydrate the in-memory ring buffer from the database. Called once on
-   * startup after sessionManager.init() so connecting clients see the
+   * Hydrate the in-memory ring buffer from the database. Called once
+   * after sessionManager.init() so connecting clients see the
    * session-so-far instead of an empty feed.
    */
   async hydrate() {
@@ -29,28 +44,15 @@ export class MessageAggregator {
       `SELECT id, timestamp, sender, room, room_color, meeting_id, content, type, saved, note
          FROM messages
         WHERE session_id = $1
+          AND ($2::text IS NULL OR org_id = $2)
         ORDER BY timestamp DESC
-        LIMIT $2`,
-      [sessionId, this.maxMessages]
+        LIMIT $3`,
+      [sessionId, this.orgId, this.maxMessages]
     );
-    // DB returns newest-first; flip so the in-memory buffer is oldest-first
-    // (same shape as if these had arrived through addMessage live).
     this.messages = rows.reverse().map(rowToMessage);
-    console.log(`[Aggregator] hydrated ${this.messages.length} messages from session ${sessionId}`);
+    console.log(`[Aggregator ${this.orgId}] hydrated ${this.messages.length} from ${sessionId}`);
   }
 
-  /**
-   * Add a new message to the aggregated feed. Writes through to the DB
-   * (best-effort — a DB error is logged but doesn't drop the live event).
-   *
-   * Echo dedup: when an inbound chat message (type 'chat') exactly
-   * matches a recently-added outgoing message (type 'reply' or
-   * 'broadcast') with the same sender/content/meetingId within a 5s
-   * window, we skip it. This handles the case where Recall echoes our
-   * bot's own outgoing chat back via the participant_events.chat_message
-   * webhook — otherwise the operator would see two copies of every
-   * reply they send.
-   */
   async addMessage(messageData) {
     const message = {
       id: uuidv4(),
@@ -65,7 +67,7 @@ export class MessageAggregator {
       note: null,
     };
 
-    // Echo dedup: inbound chat matching a recent outgoing message?
+    // Echo dedup: inbound chat matching a recent outgoing?
     if (message.type === 'chat') {
       const cutoffMs = Date.now() - 5000;
       const recent = this.messages.slice(-10);
@@ -77,7 +79,7 @@ export class MessageAggregator {
         new Date(m.timestamp).getTime() >= cutoffMs
       );
       if (isEcho) {
-        console.log(`[Aggregator] skipping echo of outgoing message in ${message.room}`);
+        console.log(`[Aggregator ${this.orgId}] skipping echo in ${message.room}`);
         return null;
       }
     }
@@ -85,9 +87,13 @@ export class MessageAggregator {
     this.messages.push(message);
     if (this.messages.length > this.maxMessages) this.messages.shift();
     this.updateRoomStats(message.room);
-    this.io.emit('newMessage', message);
+    this._emit('newMessage', message);
     if (message.meetingId) {
-      this.io.to(`room:${message.meetingId}`).emit('roomMessage', message);
+      // Room-specific channel: only sockets in BOTH the org room AND the
+      // meeting room get it. (Meeting-scoped subscriptions for room filter
+      // views.) We namespace by org to prevent meeting-id collisions
+      // across orgs.
+      this.io.to(`org:${this.orgId}:room:${message.meetingId}`).emit('roomMessage', message);
     }
 
     if (this.db && this.sessionManager?.current) {
@@ -95,8 +101,8 @@ export class MessageAggregator {
         await this.db.query(
           `INSERT INTO messages
               (id, session_id, timestamp, sender, room, room_color,
-               meeting_id, content, type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+               meeting_id, content, type, org_id, tenant_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($10, 'ryteproductions'))`,
           [
             message.id,
             this.sessionManager.current.id,
@@ -107,25 +113,19 @@ export class MessageAggregator {
             message.meetingId,
             message.content,
             message.type,
+            this.orgId,
           ]
         );
       } catch (err) {
-        console.error('[Aggregator] DB insert failed (message still in live feed):', err.message);
+        console.error(`[Aggregator ${this.orgId}] DB insert failed:`, err.message);
       }
     }
 
-    console.log(`[${message.room}] ${message.sender}: ${message.content.substring(0, 50)}...`);
+    console.log(`[${this.orgId}/${message.room}] ${message.sender}: ${message.content.substring(0, 50)}...`);
     return message;
   }
 
-  /**
-   * Mark a message as saved (or unsaved). Updates the in-memory entry
-   * if present, writes through to the DB, and emits a socket event so
-   * other connected clients (display window, second moderator) stay in
-   * sync. Returns the updated message or null if not found.
-   */
   async setSaved(messageId, saved, note = null) {
-    // Update in-memory if present (recent message)
     const inMem = this.messages.find(m => m.id === messageId);
     if (inMem) {
       inMem.saved = saved;
@@ -140,50 +140,45 @@ export class MessageAggregator {
                   saved_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
                   note = $3
             WHERE id = $1
+              AND ($4::text IS NULL OR org_id = $4)
         RETURNING id, timestamp, sender, room, room_color, meeting_id, content, type, saved, note`,
-          [messageId, saved, saved ? note : null]
+          [messageId, saved, saved ? note : null, this.orgId]
         );
         if (result.rows.length === 0 && !inMem) return null;
         const message = result.rows[0] ? rowToMessage(result.rows[0]) : inMem;
-        this.io.emit(saved ? 'messageSaved' : 'messageUnsaved', message);
+        this._emit(saved ? 'messageSaved' : 'messageUnsaved', message);
         return message;
       } catch (err) {
-        console.error('[Aggregator] setSaved DB error:', err.message);
-        // Best-effort: still emit if we had the message in memory
-        if (inMem) this.io.emit(saved ? 'messageSaved' : 'messageUnsaved', inMem);
+        console.error(`[Aggregator ${this.orgId}] setSaved DB error:`, err.message);
+        if (inMem) this._emit(saved ? 'messageSaved' : 'messageUnsaved', inMem);
         return inMem || null;
       }
     }
 
-    // No DB — operate on in-memory only
     if (inMem) {
-      this.io.emit(saved ? 'messageSaved' : 'messageUnsaved', inMem);
+      this._emit(saved ? 'messageSaved' : 'messageUnsaved', inMem);
       return inMem;
     }
     return null;
   }
 
-  /**
-   * Return all saved messages for the given session (or the current
-   * session if none specified), newest first.
-   */
   async getSavedMessages({ sessionId } = {}) {
     const targetSession = sessionId || this.sessionManager?.current?.id;
     if (!this.db || !targetSession) {
-      // No DB: filter in-memory by current-session inferred via saved flag.
       return this.messages.filter(m => m.saved).map(m => ({ ...m }));
     }
     const { rows } = await this.db.query(
       `SELECT id, timestamp, sender, room, room_color, meeting_id, content, type, saved, note, saved_at
          FROM messages
         WHERE session_id = $1 AND saved = TRUE
+          AND ($2::text IS NULL OR org_id = $2)
         ORDER BY saved_at DESC NULLS LAST, timestamp DESC`,
-      [targetSession]
+      [targetSession, this.orgId]
     );
     return rows.map(rowToMessage);
   }
 
-  // -------- Room management (unchanged from before) --------
+  // -------- Room management (org-scoped emits) --------
 
   addRoom(roomData) {
     const room = {
@@ -195,8 +190,8 @@ export class MessageAggregator {
       streamUrl: roomData.streamUrl || null,
     };
     this.rooms.set(room.id, room);
-    this.io.emit('roomAdded', room);
-    console.log(`Room added: ${room.name}`);
+    this._emit('roomAdded', room);
+    console.log(`[${this.orgId}] room added: ${room.name}`);
     return room;
   }
 
@@ -204,13 +199,13 @@ export class MessageAggregator {
     const room = this.rooms.get(roomId);
     if (room) {
       this.rooms.delete(roomId);
-      this.io.emit('roomRemoved', { id: roomId, name: room.name });
-      console.log(`Room removed: ${room.name}`);
+      this._emit('roomRemoved', { id: roomId, name: room.name });
+      console.log(`[${this.orgId}] room removed: ${room.name}`);
     }
   }
 
   updateRoomStats(roomName) {
-    for (const [id, room] of this.rooms) {
+    for (const [, room] of this.rooms) {
       if (room.name === roomName) {
         room.messageCount = (room.messageCount || 0) + 1;
         room.lastActivity = new Date().toISOString();
@@ -237,7 +232,7 @@ export class MessageAggregator {
 
   getStats() {
     const roomStats = {};
-    for (const [id, room] of this.rooms) {
+    for (const [, room] of this.rooms) {
       roomStats[room.name] = {
         messageCount: room.messageCount || 0,
         participantCount: room.participantCount || 0,
@@ -254,15 +249,10 @@ export class MessageAggregator {
 
   clearMessages() {
     this.messages = [];
-    this.io.emit('messagesCleared');
+    this._emit('messagesCleared');
   }
 }
 
-/**
- * Convert a DB row to the message shape the React client expects.
- * Centralized so the same translation is applied everywhere a row
- * leaves the persistence layer.
- */
 function rowToMessage(row) {
   return {
     id: row.id,

@@ -212,7 +212,14 @@ function DisplayView() {
 
   useEffect(() => {
     const newSocket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling']
+      transports: ['websocket', 'polling'],
+      withCredentials: true,
+    });
+    newSocket.on('connect_error', (err) => {
+      console.warn('[display socket] connect_error:', err.message);
+      if (/sign|session/i.test(err.message || '')) {
+        window.location.href = '/signin';
+      }
     });
     setSocket(newSocket);
 
