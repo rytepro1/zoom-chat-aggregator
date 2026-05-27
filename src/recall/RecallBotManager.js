@@ -336,10 +336,15 @@ export class RecallBotManager {
   }
 
   /**
-   * Called by /webhook/recall/status. Updates the bot_usage row for
-   * this bot: always records last_status, and on terminal states
-   * (done / fatal) closes left_at + duration_seconds. Idempotent via
-   * COALESCE so the operator-initiated disconnect path doesn't get
+   * Called by /webhook/recall/status. Recall's workspace webhooks fire
+   * each bot lifecycle state as its own event ("bot.done", "bot.fatal",
+   * "bot.in_call_recording", etc.) — not a single "status_change"
+   * envelope — so the status is whatever follows "bot." in the event
+   * name. We also probe a `code` field as a fallback in case the
+   * envelope evolves.
+   *
+   * On terminal states (done / fatal) closes left_at + duration_seconds
+   * via COALESCE so the operator-initiated disconnect path doesn't get
    * stomped if the webhook arrives later.
    */
   async handleStatusChangeEvent(payload) {
@@ -353,9 +358,11 @@ export class RecallBotManager {
       payload?.data?.data?.bot?.id ||
       null;
 
-    // Recall labels the new status under a few possible keys depending
-    // on envelope version; probe a few likely paths.
-    const statusRaw =
+    // Primary source of truth: the event name itself.
+    const eventName = String(payload?.event || '').trim();
+    const eventStatus = eventName.startsWith('bot.') ? eventName.slice(4) : null;
+    // Fallback in case the envelope shape includes an explicit code.
+    const codeStatus =
       payload?.data?.data?.code ||
       payload?.data?.data?.status ||
       payload?.data?.code ||
@@ -363,7 +370,7 @@ export class RecallBotManager {
       payload?.code ||
       payload?.status ||
       null;
-    const status = statusRaw ? String(statusRaw).toLowerCase() : null;
+    const status = String(eventStatus || codeStatus || '').toLowerCase() || null;
 
     if (!botId) {
       console.warn('[Recall] handleStatusChangeEvent: no bot id in payload');
