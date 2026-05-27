@@ -148,3 +148,56 @@ with borderless-window setup. A single button in the SessionHeader
 (or display view itself) to toggle cursor visibility for an in-progress
 show would be the right way to bring it back without the setup
 friction.
+
+### Operator-sends-chat (reply-all only)
+Recall's bot API supports `POST /api/v1/bot/{id}/send_chat_message/`.
+We could surface a "Reply" affordance in the React UI that posts a
+message back into the meeting as the bot. Decisions made:
+- **Scope:** reply-to-all only for v1. No DMs (privacy/compliance
+  risk — see MONETIZATION-PLAN.md).
+- **Identity:** operator picks the display name the bot uses per
+  meeting (not stuck with "Chat Capture by RYTE Productions").
+  Probably a field in the Meeting Manager's connect form, defaulting
+  to a session-wide setting.
+- **Rate limit:** server-side cap (e.g. 30 messages/minute per bot)
+  with a clear error if exceeded. Belt-and-suspenders against
+  accidental loops and credential-compromise abuse.
+- **Audit log:** every sent message logged with sender (auth user
+  once we have auth), bot id, meeting id, timestamp.
+- **Reply mechanism:** could be either an inline reply button on each
+  ChatMessage (replies-in-context UX) or a dedicated compose box at
+  the bottom of the feed. Inline probably feels more natural for
+  "answering an audience question."
+- **Tier-gating (post-monetization):** Solo = capture only; Pro+ =
+  capture + reply.
+
+Effort: ~1 day for the basic "reply to all" wired into the existing
+chat flow. Replies round-trip through our own /webhook/recall/chat so
+they show up in the feed automatically, no special persistence.
+
+### Multi-operator polish
+Multi-operator already works (shared backend → both operators see
+the same live state synced via Socket.io and Postgres). Refinements
+worth doing eventually:
+- **Presence indicator** in the header: "Theo and Sarah are
+  moderating." Socket.io makes this trivial — track connected client
+  count + identity, emit a presence event on connect/disconnect.
+  Probably tier-gated to Pro+ since Solo is single-operator by
+  definition.
+- **Per-action attribution.** Lands naturally with multi-user auth
+  in monetization Phase 1: store `featured_by_user_id`,
+  `saved_by_user_id`, etc. on moderation/save events. Surface as a
+  tooltip ("featured by Sarah, 2 min ago") on highlighted messages.
+- **Conflict UX.** Today's "last write wins" is fine in practice
+  (operators talk to each other) but pathological races during a
+  hot moment are possible. Could add a brief "Sarah just featured a
+  different message" toast notification when a feature changes from
+  someone else's hand within 2 seconds of your own intent.
+- **Observer mode / role differentiation.** Right now every operator
+  has equal moderation powers. Tier-gated as a Pro+ feature later:
+  admin/operator/observer roles, with observers seeing the feed but
+  unable to feature/save.
+
+Effort: presence indicator is ~half a day standalone. Attribution
+piggybacks on the auth rebuild (free if done together). Conflict UX
+and observer mode are nice-to-have polish, ~1-2 days each.
