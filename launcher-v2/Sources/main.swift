@@ -14,7 +14,12 @@ struct ZoomChatApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        WindowGroup("Zoom Chat Aggregator") {
+        // `Window` (single-instance) instead of `WindowGroup` — closing
+        // a WindowGroup-managed window leaves nothing for SwiftUI to
+        // reopen, so Dock-click did nothing. `Window` is designed for
+        // single-instance apps: closing hides, clicking the Dock icon
+        // (or selecting it in the Window menu) brings it back.
+        Window("Zoom Chat Aggregator", id: "main") {
             ContentView()
                 .frame(minWidth: 900, minHeight: 600)
         }
