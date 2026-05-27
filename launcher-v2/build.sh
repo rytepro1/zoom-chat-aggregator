@@ -1,24 +1,24 @@
 #!/bin/bash
-# Builds the self-contained ZoomChat.app:
-#   - Compiles the Swift launcher as a universal (arm64 + x86_64) binary
-#   - Bundles the project source, production React build, server node_modules, and .env
-#   - Bundles the Node runtime so the target Mac doesn't need Node installed
+# Builds the thin-client ZoomChat.app — a small Swift binary that loads
+# the Railway-hosted React UI in a native macOS window with a
+# borderless, full-screen presenter pop-out on the secondary display.
+#
+# The .app does NOT bundle Node, npm, the project source, or any secrets;
+# all of that lives server-side on Railway. Resulting .app is ~5 MB and
+# drag-and-drop installable on any Mac running macOS 13+.
+#
 # Output: ~/Applications/ZoomChat.app
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="ZoomChat"
 DEST="$HOME/Applications/${APP_NAME}.app"
 BUILD_DIR="$SCRIPT_DIR/.build"
 
 mkdir -p "$BUILD_DIR" "$HOME/Applications"
 
-echo "==> 1/5  Building React app for production..."
-(cd "$ROOT/client" && npm run build) >/dev/null
-
-echo "==> 2/5  Compiling Swift launcher (universal binary)..."
+echo "==> 1/4  Compiling Swift launcher (universal binary)..."
 swiftc -O -parse-as-library -target arm64-apple-macos13 \
   -o "$BUILD_DIR/${APP_NAME}-arm64" \
   "$SCRIPT_DIR/Sources/main.swift"
@@ -30,7 +30,7 @@ lipo -create \
   "$BUILD_DIR/${APP_NAME}-arm64" \
   "$BUILD_DIR/${APP_NAME}-x86_64"
 
-echo "==> 3/5  Assembling .app bundle skeleton..."
+echo "==> 2/4  Assembling .app bundle skeleton..."
 rm -rf "$DEST"
 mkdir -p "$DEST/Contents/MacOS"
 mkdir -p "$DEST/Contents/Resources"
@@ -54,25 +54,20 @@ cat > "$DEST/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.business</string>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-    </dict>
 </dict>
 </plist>
 EOF
 
-echo "==> 4/5  Generating .icns icon..."
+echo "==> 3/4  Generating .icns icon..."
 WORK="$(mktemp -d)"
 ICONSET="$WORK/icon.iconset"
 mkdir -p "$ICONSET"
@@ -89,22 +84,7 @@ rm "$ICONSET/icon_64x64.png" "$ICONSET/icon_1024x1024.png"
 iconutil -c icns -o "$DEST/Contents/Resources/icon.icns" "$ICONSET"
 rm -rf "$WORK"
 
-echo "==> 5/5  Bundling project files + Node runtime..."
-PROJECT="$DEST/Contents/Resources/project"
-mkdir -p "$PROJECT/client"
-cp -R "$ROOT/src"            "$PROJECT/"
-cp -R "$ROOT/client/dist"    "$PROJECT/client/"
-cp -R "$ROOT/node_modules"   "$PROJECT/"
-cp    "$ROOT/package.json"   "$PROJECT/"
-cp    "$ROOT/package-lock.json" "$PROJECT/"
-if [ -f "$ROOT/.env" ]; then
-  cp "$ROOT/.env" "$PROJECT/"
-fi
-
-NODE_RUNTIME="$DEST/Contents/Resources/node-runtime"
-mkdir -p "$NODE_RUNTIME"
-cp -L "$(which node)" "$NODE_RUNTIME/node"
-
+echo "==> 4/4  Codesigning..."
 # Ad-hoc codesign so macOS will run it without the "damaged" warning.
 codesign --force --deep --sign - "$DEST" >/dev/null 2>&1 || true
 
