@@ -29,10 +29,68 @@ struct ZoomChatApp: App {
 // MARK: - App delegate
 
 /// Thin client: no backend processes to manage. The .app is just a
-/// branded WKWebView pointing at the Railway-hosted server.
+/// branded WKWebView pointing at the Railway-hosted server. We DO own
+/// the session-lifecycle UX on quit, though — the operator gets a
+/// dialog asking whether to end the current session or just close the
+/// app and leave the session running in the background.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Closing the main window just hides it (app stays in the Dock);
+    /// ⌘-Q is what triggers the end-session dialog.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
+
+    /// Restore the main window when the user clicks the Dock icon
+    /// after closing it. SwiftUI's WindowGroup handles re-showing for
+    /// us as long as we return true here.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         return true
+    }
+
+    /// On ⌘-Q (or any other quit trigger), ask whether to end the
+    /// current session or just close the app. End-session is an async
+    /// HTTP POST, so we return .terminateLater and reply when the
+    /// network call completes.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let alert = NSAlert()
+        alert.messageText = "End the current session?"
+        alert.informativeText = "Ending the session finalizes its chat log on the server. Keeping it running leaves the session active in the background — useful if another operator is still working with it or you'll be back soon."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "End Session and Quit")    // .alertFirstButtonReturn
+        alert.addButton(withTitle: "Keep Running and Quit")   // .alertSecondButtonReturn
+        alert.addButton(withTitle: "Cancel")                  // .alertThirdButtonReturn
+
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            endSessionThenQuit()
+            return .terminateLater
+        case .alertSecondButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
+    }
+
+    private func endSessionThenQuit() {
+        var request = URLRequest(url: kAppURL.appendingPathComponent("api/sessions/end"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{}".utf8)
+        request.timeoutInterval = 5
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error {
+                NSLog("[ZoomChat] end-session POST failed: \(error.localizedDescription)")
+            } else if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                NSLog("[ZoomChat] end-session POST returned HTTP \(http.statusCode)")
+            }
+            // Reply regardless — we already asked the user, no point
+            // blocking the quit if the network call failed.
+            DispatchQueue.main.async {
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+        }.resume()
     }
 }
 
