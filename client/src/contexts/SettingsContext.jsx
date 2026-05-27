@@ -34,6 +34,9 @@ const defaultSettings = {
   appTitle: 'Zoom Chat Aggregator',
   appSubtitle: 'Real-time unified chat from all meeting rooms',
   logoUrl: '',
+  // Operator-chosen brand mark printed in the bottom-right of PNG quote
+  // card exports. Empty = no footer (the current default).
+  brandMark: '',
 
   // Behavior
   autoScroll: true,

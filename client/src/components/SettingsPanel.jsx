@@ -211,6 +211,12 @@ function SettingsPanel() {
               onChange={(v) => updateSetting('logoUrl', v)}
               placeholder="https://example.com/logo.png"
             />
+            <TextInput
+              label="Brand mark (PNG exports)"
+              value={settings.brandMark}
+              onChange={(v) => updateSetting('brandMark', v)}
+              placeholder="e.g. RYTE PRODUCTIONS"
+            />
           </Section>
 
           {/* Reset */}

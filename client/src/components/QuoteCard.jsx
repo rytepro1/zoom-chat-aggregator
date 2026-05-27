@@ -1,4 +1,5 @@
 import React, { forwardRef } from 'react';
+import { useSettings } from '../contexts/SettingsContext';
 
 /**
  * Branded 1080x1080 PNG-ready quote card used by SavedPanel's "Export
@@ -13,11 +14,13 @@ import React, { forwardRef } from 'react';
  * resolve external CSS reliably.
  */
 const QuoteCard = forwardRef(({ message }, ref) => {
+  const { settings } = useSettings();
   const content = message.content || '';
   const sender = message.sender || 'Unknown';
   // Room color stays as a visual cue (left edge + quote mark) even
   // though the room *name* is no longer printed on the card.
   const accent = message.roomColor || '#3b82f6';
+  const brandMark = (settings.brandMark || '').trim();
 
   // Adaptive quote font size by content length. Tuned for ~1080px width
   // with ~80px side padding (effective text width ~920px).
@@ -78,18 +81,36 @@ const QuoteCard = forwardRef(({ message }, ref) => {
         {content}
       </div>
 
-      {/* Attribution — sender only. Room pill and brand footer were
-          removed per operator request; we can wire them back as
-          opt-in settings if customers ask. */}
+      {/* Attribution — sender + optional operator-chosen brand mark.
+          Brand mark renders bottom-right only when set in Settings →
+          Branding; otherwise the row is just the sender name. */}
       <div
         style={{
           borderTop: '1px solid rgba(255,255,255,0.18)',
           paddingTop: 28,
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 24,
         }}
       >
         <div style={{ fontSize: 36, fontWeight: 700, color: '#ffffff' }}>
           {sender}
         </div>
+        {brandMark && (
+          <div
+            style={{
+              fontSize: 18,
+              fontWeight: 600,
+              letterSpacing: '0.18em',
+              textTransform: 'uppercase',
+              color: 'rgba(255,255,255,0.55)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {brandMark}
+          </div>
+        )}
       </div>
     </div>
   );
