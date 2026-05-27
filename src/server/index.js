@@ -364,6 +364,24 @@ app.post('/api/meetings/:meetingId/reply', async (req, res) => {
   const text = req.body?.text;
   try {
     const result = await recallBotManager.sendChatToMeeting(meetingId, text);
+
+    // Append to the live feed so the operator has persistent evidence
+    // of what they sent. Dedupe in MessageAggregator handles the case
+    // where Recall later echoes the bot's own message back via the
+    // chat webhook.
+    const botInfo = recallBotManager.botsByMeeting.get(meetingId);
+    if (botInfo) {
+      await messageAggregator.addMessage({
+        sender: botInfo.botName,
+        content: text,
+        room: botInfo.roomName,
+        roomColor: botInfo.roomColor,
+        meetingId,
+        timestamp: new Date().toISOString(),
+        type: 'reply',
+      });
+    }
+
     res.json({ success: true, ...result });
   } catch (err) {
     console.error(`POST /api/meetings/${meetingId}/reply failed:`, err.message);
@@ -385,6 +403,25 @@ app.post('/api/broadcast', async (req, res) => {
   const text = req.body?.text;
   try {
     const results = await recallBotManager.broadcastChat(text);
+
+    // For each successful per-room send, append an outgoing message to
+    // that room's feed so the operator has a persistent record of what
+    // went where.
+    for (const r of results) {
+      if (!r.ok) continue;
+      const botInfo = recallBotManager.botsByMeeting.get(r.meetingId);
+      if (!botInfo) continue;
+      await messageAggregator.addMessage({
+        sender: botInfo.botName,
+        content: text,
+        room: botInfo.roomName,
+        roomColor: botInfo.roomColor,
+        meetingId: r.meetingId,
+        timestamp: new Date().toISOString(),
+        type: 'broadcast',
+      });
+    }
+
     res.json({
       success: true,
       sent: results.filter(r => r.ok).length,

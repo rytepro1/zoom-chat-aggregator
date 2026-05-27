@@ -42,6 +42,14 @@ export class MessageAggregator {
   /**
    * Add a new message to the aggregated feed. Writes through to the DB
    * (best-effort — a DB error is logged but doesn't drop the live event).
+   *
+   * Echo dedup: when an inbound chat message (type 'chat') exactly
+   * matches a recently-added outgoing message (type 'reply' or
+   * 'broadcast') with the same sender/content/meetingId within a 5s
+   * window, we skip it. This handles the case where Recall echoes our
+   * bot's own outgoing chat back via the participant_events.chat_message
+   * webhook — otherwise the operator would see two copies of every
+   * reply they send.
    */
   async addMessage(messageData) {
     const message = {
@@ -56,6 +64,23 @@ export class MessageAggregator {
       saved: false,
       note: null,
     };
+
+    // Echo dedup: inbound chat matching a recent outgoing message?
+    if (message.type === 'chat') {
+      const cutoffMs = Date.now() - 5000;
+      const recent = this.messages.slice(-10);
+      const isEcho = recent.some(m =>
+        (m.type === 'reply' || m.type === 'broadcast') &&
+        m.sender === message.sender &&
+        m.content === message.content &&
+        m.meetingId === message.meetingId &&
+        new Date(m.timestamp).getTime() >= cutoffMs
+      );
+      if (isEcho) {
+        console.log(`[Aggregator] skipping echo of outgoing message in ${message.room}`);
+        return null;
+      }
+    }
 
     this.messages.push(message);
     if (this.messages.length > this.maxMessages) this.messages.shift();

@@ -184,6 +184,12 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
     );
   }
 
+  // Outgoing messages (operator-sent replies + broadcasts) get a
+  // distinct visual treatment so the operator can easily spot what
+  // they sent in the unified feed.
+  const isOutgoing = message.type === 'reply' || message.type === 'broadcast';
+  const outgoingLabel = message.type === 'reply' ? '↩ Reply' : message.type === 'broadcast' ? '📢 Broadcast' : null;
+
   return (
     <div
       className={`flex items-start gap-3 rounded-lg relative group ${
@@ -192,7 +198,12 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
         isHighlighted ? 'ring-2 ring-yellow-400 bg-yellow-400/10' : ''
       }`}
       style={{
-        backgroundColor: isHighlighted ? 'rgba(250, 204, 21, 0.1)' : 'rgba(255,255,255,0.03)',
+        backgroundColor: isHighlighted
+          ? 'rgba(250, 204, 21, 0.1)'
+          : isOutgoing
+            ? 'rgba(59, 130, 246, 0.10)'   // subtle accent tint for outgoing
+            : 'rgba(255,255,255,0.03)',
+        borderLeft: isOutgoing ? '3px solid var(--accent-color)' : undefined,
         marginBottom: 'var(--message-spacing)',
       }}
     >
@@ -212,6 +223,18 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
       {/* Message content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2 flex-wrap">
+          {outgoingLabel && (
+            <span
+              className="text-xs px-1.5 py-0.5 rounded font-medium"
+              style={{
+                backgroundColor: 'var(--accent-color)',
+                color: 'white',
+              }}
+              title={message.type === 'reply' ? 'Sent by an operator as a reply to this room' : 'Sent by an operator as a broadcast to all rooms'}
+            >
+              {outgoingLabel}
+            </span>
+          )}
           {settings.showSenderNames && (
             <span
               className="font-semibold"

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import ChatMessage from './ChatMessage';
+import BroadcastComposer from './BroadcastComposer';
 import { useSettings } from '../contexts/SettingsContext';
 
 function ChatFeed({ messages, selectedRoom }) {
@@ -33,6 +34,12 @@ function ChatFeed({ messages, selectedRoom }) {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Broadcast composer — always visible at the top so the operator
+          can fire a cross-room announcement without digging through
+          menus. Collapsed by default so it doesn't dominate the
+          visual space. */}
+      <BroadcastComposer />
+
       {/* Header */}
       <div
         className="px-4 py-2 border-b border-white/10 flex items-center justify-between"
