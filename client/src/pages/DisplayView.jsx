@@ -11,7 +11,10 @@ const SOCKET_URL = import.meta.env.DEV
 function DisplayViewContent({ socket }) {
   const [messages, setMessages] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [showControls, setShowControls] = useState(false);
+  // Start true so the cursor is visible when the operator first opens
+  // the presenter window — otherwise they can't find it to drag the
+  // (borderless) window to the secondary display. Idle-hides after 3s.
+  const [showControls, setShowControls] = useState(true);
   const containerRef = useRef(null);
   const hideControlsTimeout = useRef(null);
   const scrollIntervalRef = useRef(null);
@@ -74,7 +77,9 @@ function DisplayViewContent({ socket }) {
     };
   }, []);
 
-  // Show controls on mouse move, hide after delay
+  // Show cursor + controls on mouse move, hide both after delay so
+  // the on-air presenter view is clean during a show but the operator
+  // can still find the cursor when setting up the window.
   const handleMouseMove = () => {
     setShowControls(true);
     if (hideControlsTimeout.current) {
@@ -87,12 +92,15 @@ function DisplayViewContent({ socket }) {
 
   return (
     <div
-      className="h-screen w-screen overflow-hidden cursor-none"
+      className="h-screen w-screen overflow-hidden"
       style={{
         backgroundColor: 'var(--bg-color)',
         color: 'var(--text-color)',
         fontFamily: 'var(--font-family)',
         fontSize: 'var(--base-font-size)',
+        // Visible cursor by default; auto-hides after 3s of no movement
+        // (the existing showControls timer drives the same idle state).
+        cursor: showControls ? 'default' : 'none',
       }}
       onMouseMove={handleMouseMove}
     >

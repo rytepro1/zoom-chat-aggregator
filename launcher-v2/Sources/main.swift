@@ -136,12 +136,22 @@ final class PopOutWindowManager {
         window.title = "ZoomChat Display" // metadata for window manager / accessibility
         window.backgroundColor = .black
         window.isReleasedWhenClosed = false
+        // Lets the operator click-and-drag from any non-control area to
+        // reposition the window — borderless windows have no title bar
+        // to grab, so without this they're effectively pinned.
+        window.isMovableByWindowBackground = true
         // Joins all spaces so the operator can switch desktops freely
         // without dragging the presenter window around.
         window.collectionBehavior = [.fullScreenPrimary, .canJoinAllSpaces]
         window.setFrame(frame, display: true)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // Register with the app-wide Window menu so the operator can
+        // bring it back to the front if it gets occluded behind the
+        // main window. Manually-created NSWindows aren't added here
+        // automatically the way SwiftUI WindowGroups are.
+        NSApp.addWindowsItem(window, title: "ZoomChat Display", filename: false)
 
         // ⎋ Esc closes the presenter window. (Without a title bar,
         // there's no X button — Esc is the standard exit.)
@@ -167,6 +177,7 @@ final class PopOutWindowManager {
             if let m = self.eventMonitors.removeValue(forKey: key) {
                 NSEvent.removeMonitor(m)
             }
+            NSApp.removeWindowsItem(window)
             self.windows.removeAll { $0 === window }
         }
     }
