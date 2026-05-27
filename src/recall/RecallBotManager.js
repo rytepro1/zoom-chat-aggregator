@@ -134,27 +134,24 @@ export class RecallBotManager {
       meetingUrl += `?pwd=${encodeURIComponent(String(passcode).trim())}`;
     }
 
-    const chatWebhookUrl   = `${this.publicWebhookUrl}/webhook/recall/chat`;
-    const statusWebhookUrl = `${this.publicWebhookUrl}/webhook/recall/status`;
+    const chatWebhookUrl = `${this.publicWebhookUrl}/webhook/recall/chat`;
 
+    // Note: realtime_endpoints only accepts participant_events.* events
+    // (chat, video, audio, etc.). Bot lifecycle events like
+    // bot.status_change live in Recall's workspace-level webhook system,
+    // configured per-workspace in the Recall dashboard rather than
+    // per-bot here. The /webhook/recall/status route is still wired up
+    // and ready to receive those events once the workspace webhook is
+    // added in the Recall dashboard pointing at it.
     const body = {
       meeting_url: meetingUrl,
       bot_name: 'Chat Capture by RYTE Productions',
       recording_config: {
         realtime_endpoints: [
-          // Chat events go to the chat handler.
           {
             type: 'webhook',
             url: chatWebhookUrl,
             events: ['participant_events.chat_message'],
-          },
-          // Bot lifecycle events go to the status handler, which closes
-          // bot_usage rows for billing once the bot reaches a terminal
-          // state. Separate URL keeps each handler focused.
-          {
-            type: 'webhook',
-            url: statusWebhookUrl,
-            events: ['bot.status_change'],
           },
         ],
       },
