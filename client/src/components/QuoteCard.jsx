@@ -15,7 +15,8 @@ import React, { forwardRef } from 'react';
 const QuoteCard = forwardRef(({ message }, ref) => {
   const content = message.content || '';
   const sender = message.sender || 'Unknown';
-  const room = message.room || '';
+  // Room color stays as a visual cue (left edge + quote mark) even
+  // though the room *name* is no longer printed on the card.
   const accent = message.roomColor || '#3b82f6';
 
   // Adaptive quote font size by content length. Tuned for ~1080px width
@@ -77,51 +78,18 @@ const QuoteCard = forwardRef(({ message }, ref) => {
         {content}
       </div>
 
-      {/* Attribution */}
+      {/* Attribution — sender only. Room pill and brand footer were
+          removed per operator request; we can wire them back as
+          opt-in settings if customers ask. */}
       <div
         style={{
           borderTop: '1px solid rgba(255,255,255,0.18)',
           paddingTop: 28,
-          display: 'flex',
-          alignItems: 'baseline',
-          flexWrap: 'wrap',
-          gap: 18,
         }}
       >
         <div style={{ fontSize: 36, fontWeight: 700, color: '#ffffff' }}>
           {sender}
         </div>
-        {room && (
-          <div
-            style={{
-              fontSize: 22,
-              padding: '8px 14px',
-              borderRadius: 10,
-              backgroundColor: accent,
-              color: '#ffffff',
-              fontWeight: 600,
-              letterSpacing: 0.5,
-            }}
-          >
-            {room}
-          </div>
-        )}
-      </div>
-
-      {/* Brand footer */}
-      <div
-        style={{
-          position: 'absolute',
-          right: 90,
-          bottom: 50,
-          fontSize: 18,
-          letterSpacing: 4,
-          opacity: 0.45,
-          color: '#ffffff',
-          fontWeight: 600,
-        }}
-      >
-        RYTE PRODUCTIONS
       </div>
     </div>
   );
