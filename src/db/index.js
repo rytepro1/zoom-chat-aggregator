@@ -64,6 +64,25 @@ CREATE INDEX IF NOT EXISTS idx_bot_usage_recall_bot_id ON bot_usage(recall_bot_i
 CREATE INDEX IF NOT EXISTS idx_bot_usage_session       ON bot_usage(session_id);
 CREATE INDEX IF NOT EXISTS idx_bot_usage_billing       ON bot_usage(tenant_id, billed, left_at);
 
+-- Outbound chat audit log. Every message sent via the bot (reply or
+-- broadcast) writes a row here. Provides post-hoc evidence of what
+-- went out + becomes the basis for "who sent it" attribution once auth
+-- lands. is_broadcast distinguishes single-room reply (false) from
+-- multi-room broadcast (true — multiple rows written, one per bot).
+CREATE TABLE IF NOT EXISTS sent_messages (
+  id              TEXT PRIMARY KEY,
+  recall_bot_id   TEXT NOT NULL,
+  meeting_id      TEXT,
+  session_id      TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  tenant_id       TEXT NOT NULL DEFAULT 'ryteproductions',
+  text            TEXT NOT NULL,
+  is_broadcast    BOOLEAN NOT NULL DEFAULT FALSE,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sent_messages_bot         ON sent_messages(recall_bot_id);
+CREATE INDEX IF NOT EXISTS idx_sent_messages_tenant_time ON sent_messages(tenant_id, sent_at);
+
 -- Tenant id placeholder on existing tables. Default value is a stand-in
 -- until multi-tenant auth lands; the migration to real org ids is then
 -- "UPDATE … SET tenant_id = <real org>", not a schema change. See

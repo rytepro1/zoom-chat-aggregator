@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useSession } from '../contexts/SessionContext';
+import BroadcastModal from './BroadcastModal';
 
 const API_URL = import.meta.env.DEV
   ? 'http://localhost:3001'
@@ -18,6 +19,7 @@ function SessionHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [pastOpen, setPastOpen] = useState(false);
   const [pastLoading, setPastLoading] = useState(false);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
   const inputRef = useRef(null);
   const menuRef = useRef(null);
 
@@ -155,6 +157,14 @@ function SessionHeader() {
             </button>
             <div className="border-t border-white/10" />
             <button
+              onClick={() => { setMenuOpen(false); setBroadcastOpen(true); }}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-white/10 transition-colors"
+              style={{ color: 'var(--text-color)' }}
+            >
+              Broadcast to All Rooms…
+            </button>
+            <div className="border-t border-white/10" />
+            <button
               onClick={openPastSessions}
               className="w-full text-left px-3 py-2 text-sm hover:bg-white/10 transition-colors rounded-b-lg"
               style={{ color: 'var(--text-color)' }}
@@ -172,6 +182,10 @@ function SessionHeader() {
           currentId={currentSession.id}
           onClose={() => setPastOpen(false)}
         />
+      )}
+
+      {broadcastOpen && (
+        <BroadcastModal onClose={() => setBroadcastOpen(false)} />
       )}
     </div>
   );

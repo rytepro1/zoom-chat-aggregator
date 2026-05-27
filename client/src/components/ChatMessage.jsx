@@ -59,12 +59,24 @@ function formatTime(timestamp) {
   });
 }
 
+const API_URL = import.meta.env.DEV
+  ? 'http://localhost:3001'
+  : window.location.origin;
+
 function ChatMessage({ message, showActions = true, onFeature, moderation: moderationProp, displayMode = false }) {
   const { settings } = useSettings();
   const moderationFromContext = useModerationSafe();
   const moderation = moderationProp || moderationFromContext;
   const saved = useSavedSafe();
   const isSaved = saved ? saved.isSaved(message.id) || message.saved : false;
+
+  // Reply state — collapsed input that expands inline when the Reply
+  // button is clicked. The reply goes to the bot in the message's
+  // originating meeting (not a broadcast).
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [replySending, setReplySending] = useState(false);
+  const [replyError, setReplyError] = useState('');
 
   const handleToggleSave = useCallback(() => {
     if (!saved) return;
@@ -73,6 +85,33 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
       console.error('Save toggle failed:', err);
     });
   }, [saved, isSaved, message.id]);
+
+  const sendReply = useCallback(async () => {
+    const text = replyText.trim();
+    if (!text || !message.meetingId) return;
+    setReplySending(true);
+    setReplyError('');
+    try {
+      const res = await fetch(
+        `${API_URL}/api/meetings/${encodeURIComponent(message.meetingId)}/reply`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      setReplyText('');
+      setReplyOpen(false);
+    } catch (err) {
+      setReplyError(err.message);
+    } finally {
+      setReplySending(false);
+    }
+  }, [message.meetingId, replyText]);
 
   // Use custom roomColor if provided, otherwise fall back to generated color
   const roomColor = message.roomColor || getRoomColor(message.room);
@@ -204,11 +243,81 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
         >
           {message.content}
         </p>
+
+        {/* Inline reply form — expands when the operator clicks Reply.
+            Goes to this message's originating meeting only (not a
+            broadcast). */}
+        {replyOpen && (
+          <div className="mt-2 flex flex-col gap-1.5">
+            <textarea
+              autoFocus
+              value={replyText}
+              onChange={(e) => setReplyText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  sendReply();
+                } else if (e.key === 'Escape') {
+                  setReplyOpen(false);
+                  setReplyText('');
+                  setReplyError('');
+                }
+              }}
+              rows={2}
+              placeholder={`Reply to ${message.room || 'this room'}…  (⌘↩ to send, esc to cancel)`}
+              className="w-full px-3 py-2 rounded bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none text-sm resize-none"
+              style={{ color: 'var(--text-color)' }}
+            />
+            {replyError && (
+              <div className="text-xs text-red-400">{replyError}</div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => { setReplyOpen(false); setReplyText(''); setReplyError(''); }}
+                disabled={replySending}
+                className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+                style={{ color: 'var(--text-color)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendReply}
+                disabled={replySending || !replyText.trim()}
+                className="text-xs px-3 py-1 rounded disabled:opacity-50 hover:opacity-90"
+                style={{ backgroundColor: 'var(--accent-color)', color: 'white' }}
+              >
+                {replySending ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Action buttons - always visible on moderator view */}
       {showActions && moderation && (
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Reply button — only when message has a meetingId we can
+              route the reply through (real Recall bots, not test
+              messages or RTMS mock). */}
+          {message.meetingId && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setReplyOpen(o => !o);
+              }}
+              className={`p-3 rounded-lg transition-colors ${
+                replyOpen
+                  ? 'bg-blue-500 text-white'
+                  : 'text-gray-400 hover:text-blue-400 hover:bg-blue-400/20'
+              }`}
+              title={replyOpen ? 'Close reply' : 'Reply to this room'}
+            >
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/>
+              </svg>
+            </button>
+          )}
+
           {/* Save (bookmark) button — only renders when SavedProvider is in scope */}
           {saved && (
             <button

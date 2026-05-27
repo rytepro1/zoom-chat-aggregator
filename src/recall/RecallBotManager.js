@@ -103,8 +103,15 @@ export class RecallBotManager {
 
     // Two-way mapping. botsByMeeting holds the canonical record; meetingsByBot
     // is a reverse index used when an inbound webhook only carries a bot id.
-    this.botsByMeeting = new Map(); // meetingId -> { botId, meetingId, roomName, roomColor, connectedAt }
+    this.botsByMeeting = new Map(); // meetingId -> { botId, meetingId, roomName, roomColor, botName, connectedAt }
     this.meetingsByBot = new Map(); // botId     -> meetingId
+
+    // Per-bot outbound rate limit (token bucket). Default 20 messages
+    // per minute per bot — generous for human-typed replies, protective
+    // against runaway loops or credential abuse. Belt-and-suspenders
+    // safety net per Theo's request.
+    this.sendRateLimitPerMinute = 20;
+    this.sendRateState = new Map(); // botId -> { tokens, lastRefillMs }
   }
 
   isConfigured() {
@@ -112,15 +119,21 @@ export class RecallBotManager {
   }
 
   /**
-   * Spawn a Recall bot for a meeting. Mirrors RTMSManager.connect's
-   * shape, but the second argument is the Zoom passcode (not a stream
-   * URL).
+   * Spawn a Recall bot for a meeting. The botName is what meeting
+   * participants will see — it's operator-chosen per meeting (no
+   * vendor-branded default) so customers can present the bot under
+   * their own identity, e.g. "Audience Q&A" or "Producer Theo".
    */
-  async connect(meetingId, passcode, roomName, roomColor = '#ef4444') {
+  async connect(meetingId, passcode, roomName, roomColor = '#ef4444', botName) {
     if (!this.isConfigured()) {
       throw new Error(
         'RecallBotManager is not configured. Set RECALL_API_KEY and PUBLIC_WEBHOOK_URL in your environment.'
       );
+    }
+
+    const cleanBotName = String(botName || '').trim();
+    if (!cleanBotName) {
+      throw new Error('botName is required — operator must pick how the bot appears to meeting participants.');
     }
 
     if (this.botsByMeeting.has(meetingId)) {
@@ -145,7 +158,7 @@ export class RecallBotManager {
     // added in the Recall dashboard pointing at it.
     const body = {
       meeting_url: meetingUrl,
-      bot_name: 'Chat Capture by RYTE Productions',
+      bot_name: cleanBotName,
       recording_config: {
         realtime_endpoints: [
           {
@@ -190,6 +203,7 @@ export class RecallBotManager {
       meetingId,
       roomName,
       roomColor,
+      botName: cleanBotName,
       connectedAt: new Date(),
     };
 
@@ -401,6 +415,137 @@ export class RecallBotManager {
       }
     } catch (err) {
       console.error('[Recall] handleStatusChangeEvent DB error:', err.message);
+    }
+  }
+
+  // ========== OUTBOUND CHAT (operator reply + broadcast) ==========
+
+  /**
+   * Send a chat message into a single meeting via its bot. Rate-limited
+   * per-bot (default 20/min) to prevent runaway loops or
+   * credential-abuse spam. Writes an audit row to sent_messages on
+   * success.
+   *
+   * Throws if no bot is tracked for the meeting (operator must connect
+   * first), if the rate limit is exceeded, or if Recall rejects the
+   * send.
+   */
+  async sendChatToMeeting(meetingId, text) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) throw new Error('Message text is required');
+
+    const botInfo = this.botsByMeeting.get(meetingId);
+    if (!botInfo) {
+      throw new Error(`No active bot for meeting ${meetingId} — connect first.`);
+    }
+
+    if (!this._consumeSendToken(botInfo.botId)) {
+      throw new Error(
+        `Rate limit exceeded for this bot (max ${this.sendRateLimitPerMinute}/minute). ` +
+        `Wait a moment before sending again.`
+      );
+    }
+
+    await this._sendChatViaRecall(botInfo.botId, cleanText);
+    await this._auditSentMessage({ botInfo, text: cleanText, isBroadcast: false });
+    return { botId: botInfo.botId, meetingId, text: cleanText };
+  }
+
+  /**
+   * Send the same message to every active bot. Used by /api/broadcast.
+   * Per-bot rate limit still applies. Returns per-bot success/failure
+   * so the UI can surface partial failures (e.g., "sent to 4 of 5
+   * meetings, 1 hit rate limit").
+   */
+  async broadcastChat(text) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) throw new Error('Message text is required');
+
+    const targets = Array.from(this.botsByMeeting.values());
+    if (targets.length === 0) {
+      throw new Error('No active bots — connect to at least one meeting first.');
+    }
+
+    // Parallel fan-out; each gets its own rate-limit check + audit row.
+    const results = await Promise.allSettled(
+      targets.map(async (botInfo) => {
+        if (!this._consumeSendToken(botInfo.botId)) {
+          throw new Error('Rate limit exceeded for this bot');
+        }
+        await this._sendChatViaRecall(botInfo.botId, cleanText);
+        await this._auditSentMessage({ botInfo, text: cleanText, isBroadcast: true });
+        return { meetingId: botInfo.meetingId, roomName: botInfo.roomName };
+      })
+    );
+
+    return results.map((r, i) => ({
+      meetingId: targets[i].meetingId,
+      roomName: targets[i].roomName,
+      ok: r.status === 'fulfilled',
+      error: r.status === 'rejected' ? (r.reason?.message || String(r.reason)) : null,
+    }));
+  }
+
+  // ---------- internals for outbound chat ----------
+
+  async _sendChatViaRecall(botId, text) {
+    const response = await fetch(`${this.apiBase}/bot/${botId}/send_chat_message/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Token ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ to: 'everyone', message: text }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`Recall send_chat_message returned ${response.status}: ${errorText.slice(0, 300) || response.statusText}`);
+    }
+  }
+
+  /**
+   * Token-bucket rate limiter, per-bot. Refills `sendRateLimitPerMinute`
+   * tokens every 60s window. Returns true if a token was available
+   * (and consumed), false if exhausted.
+   */
+  _consumeSendToken(botId) {
+    const now = Date.now();
+    const state = this.sendRateState.get(botId) || {
+      tokens: this.sendRateLimitPerMinute,
+      lastRefillMs: now,
+    };
+    // Refill if a full minute has passed since last refill.
+    if (now - state.lastRefillMs >= 60_000) {
+      state.tokens = this.sendRateLimitPerMinute;
+      state.lastRefillMs = now;
+    }
+    if (state.tokens <= 0) {
+      this.sendRateState.set(botId, state);
+      return false;
+    }
+    state.tokens -= 1;
+    this.sendRateState.set(botId, state);
+    return true;
+  }
+
+  async _auditSentMessage({ botInfo, text, isBroadcast }) {
+    if (!this.db) return;
+    try {
+      await this.db.query(
+        `INSERT INTO sent_messages (id, recall_bot_id, meeting_id, session_id, text, is_broadcast)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          randomUUID(),
+          botInfo.botId,
+          botInfo.meetingId,
+          this.sessionManager?.current?.id ?? null,
+          text,
+          isBroadcast,
+        ]
+      );
+    } catch (err) {
+      // Audit failure must NOT prevent the user from sending — just log.
+      console.error('[Recall] sent_messages audit INSERT failed:', err.message);
     }
   }
 }

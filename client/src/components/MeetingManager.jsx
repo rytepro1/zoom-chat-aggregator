@@ -22,11 +22,18 @@ const ROOM_COLORS = [
   { name: 'Rose', value: '#f43f5e' },
 ];
 
+// Last-used bot name persists across sessions so operators don't
+// re-type it every event. Stored under a stable localStorage key.
+const BOT_NAME_STORAGE_KEY = 'zoomchat.lastBotName';
+
 function MeetingManager() {
   const [meetingId, setMeetingId] = useState('');
   const [passcode, setPasscode] = useState('');
   const [roomName, setRoomName] = useState('');
   const [roomColor, setRoomColor] = useState(ROOM_COLORS[0].value);
+  const [botName, setBotName] = useState(() => {
+    try { return localStorage.getItem(BOT_NAME_STORAGE_KEY) || ''; } catch { return ''; }
+  });
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState('');
 
@@ -40,6 +47,10 @@ function MeetingManager() {
       setError('Meeting ID is required');
       return;
     }
+    if (!botName.trim()) {
+      setError('Bot Display Name is required — this is how the bot appears to meeting participants.');
+      return;
+    }
 
     setIsConnecting(true);
 
@@ -48,8 +59,13 @@ function MeetingManager() {
         meetingId: meetingId.trim().replace(/\s/g, ''),
         passcode: passcode.trim(),
         roomName: roomName.trim() || `Meeting ${meetingId}`,
-        roomColor: roomColor
+        roomColor: roomColor,
+        botName: botName.trim(),
       });
+
+      // Remember this bot name for next session so the operator doesn't
+      // have to retype it. Per-meeting changes still possible.
+      try { localStorage.setItem(BOT_NAME_STORAGE_KEY, botName.trim()); } catch {}
 
       // Clear form on success and pick next color
       setMeetingId('');
@@ -124,6 +140,23 @@ function MeetingManager() {
             className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none transition-colors"
             style={{ color: 'var(--text-color)' }}
           />
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1 opacity-70">
+            Bot Display Name *
+          </label>
+          <input
+            type="text"
+            value={botName}
+            onChange={(e) => setBotName(e.target.value)}
+            placeholder="e.g., Audience Q&A, Producer Theo"
+            className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none transition-colors"
+            style={{ color: 'var(--text-color)' }}
+          />
+          <p className="text-xs opacity-50 mt-1">
+            How the bot appears to meeting participants. Saved for next time.
+          </p>
         </div>
 
         <div>

@@ -133,10 +133,15 @@ app.get('/api/meetings', (req, res) => {
 
 // Connect to a meeting
 app.post('/api/meetings/connect', async (req, res) => {
-  const { meetingId, passcode, roomName, roomColor } = req.body;
+  const { meetingId, passcode, roomName, roomColor, botName } = req.body;
 
   if (!meetingId) {
     return res.status(400).json({ error: 'Meeting ID is required' });
+  }
+  if (useRecall && (!botName || !String(botName).trim())) {
+    return res.status(400).json({
+      error: 'Bot Display Name is required — this is how the bot will appear to participants in the meeting.',
+    });
   }
 
   // Clean up meeting ID (remove spaces and dashes)
@@ -147,7 +152,7 @@ app.post('/api/meetings/connect', async (req, res) => {
   try {
     // Route through Recall when configured; otherwise use the existing RTMS path.
     if (useRecall) {
-      await recallBotManager.connect(cleanMeetingId, passcode, finalRoomName, finalRoomColor);
+      await recallBotManager.connect(cleanMeetingId, passcode, finalRoomName, finalRoomColor, botName);
     } else {
       await rtmsManager.connect(cleanMeetingId, null, finalRoomName, finalRoomColor);
     }
@@ -343,6 +348,55 @@ function csvEscape(value) {
   }
   return s;
 }
+
+// ============================================
+// OUTBOUND CHAT: operator reply to a room, or broadcast to all rooms
+// ============================================
+
+// Reply into a single meeting via its bot. Body: { text }.
+// Only meaningful when Recall is the active path; mock-mode RTMS
+// doesn't have a real bot to send through.
+app.post('/api/meetings/:meetingId/reply', async (req, res) => {
+  if (!useRecall) {
+    return res.status(503).json({ error: 'Sending chat requires the Recall path (currently in mock mode).' });
+  }
+  const { meetingId } = req.params;
+  const text = req.body?.text;
+  try {
+    const result = await recallBotManager.sendChatToMeeting(meetingId, text);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error(`POST /api/meetings/${meetingId}/reply failed:`, err.message);
+    // Rate-limit and "no bot" errors are 400/429 not 500.
+    const status = /rate limit/i.test(err.message)
+      ? 429
+      : /no active bot/i.test(err.message) || /required/i.test(err.message)
+        ? 400
+        : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+// Broadcast the same text to every active bot. Body: { text }.
+app.post('/api/broadcast', async (req, res) => {
+  if (!useRecall) {
+    return res.status(503).json({ error: 'Broadcast requires the Recall path (currently in mock mode).' });
+  }
+  const text = req.body?.text;
+  try {
+    const results = await recallBotManager.broadcastChat(text);
+    res.json({
+      success: true,
+      sent: results.filter(r => r.ok).length,
+      failed: results.filter(r => !r.ok).length,
+      results,
+    });
+  } catch (err) {
+    console.error('POST /api/broadcast failed:', err.message);
+    res.status(/no active bots|required/i.test(err.message) ? 400 : 500)
+       .json({ error: err.message });
+  }
+});
 
 // ============================================
 // DEVELOPMENT/TESTING ENDPOINTS
