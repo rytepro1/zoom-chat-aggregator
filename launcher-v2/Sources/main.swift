@@ -83,21 +83,30 @@ final class WebViewCoordinator: NSObject, WKUIDelegate {
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        // Reuse the configuration WebKit passed in so cookies/session
-        // match the parent.
-        let newWebView = WKWebView(frame: .zero, configuration: configuration)
+        // Use DraggableWebView (subclass with mouseDownCanMoveWindow
+        // overridden to true) so the presenter window can be dragged by
+        // clicking anywhere on the chat feed — borderless windows have
+        // no native title-bar drag region, and the React UI here is
+        // read-only so we don't lose interactivity by treating every
+        // mouseDown as a potential window-drag.
+        let newWebView = DraggableWebView(frame: .zero, configuration: configuration)
         newWebView.uiDelegate = self // chained window.open from this window too
         newWebView.setValue(false, forKey: "drawsBackground")
 
-        // Pop-outs from the React UI are always intended for the
-        // presenter's confidence monitor — borderless, full screen, on
-        // the secondary display.
         PopOutWindowManager.shared.hostPresenter(webView: newWebView)
 
         // Returning the new web view tells WebKit to load
         // navigationAction.request into it automatically.
         return newWebView
     }
+}
+
+/// WKWebView that lets the operator drag the host window by clicking
+/// anywhere in the web view. AppKit's mouseDown handling distinguishes
+/// click (down+up in place) from drag (down+move), so JS click events
+/// still fire normally — only click-and-drag gestures move the window.
+final class DraggableWebView: WKWebView {
+    override var mouseDownCanMoveWindow: Bool { true }
 }
 
 // MARK: - Borderless presenter window
