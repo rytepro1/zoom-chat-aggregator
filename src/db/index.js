@@ -83,6 +83,33 @@ CREATE TABLE IF NOT EXISTS sent_messages (
 CREATE INDEX IF NOT EXISTS idx_sent_messages_bot         ON sent_messages(recall_bot_id);
 CREATE INDEX IF NOT EXISTS idx_sent_messages_tenant_time ON sent_messages(tenant_id, sent_at);
 
+-- Saved meeting rosters — operator pre-builds a list of meetings
+-- (with IDs, passcodes, room names, colors, bot display names) and
+-- deploys them all at once. Useful for recurring shows and for
+-- recovering quickly after a quit-and-relaunch (just deploy the same
+-- roster instead of re-typing each meeting).
+CREATE TABLE IF NOT EXISTS rosters (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  tenant_id   TEXT NOT NULL DEFAULT 'ryteproductions',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS roster_entries (
+  id            TEXT PRIMARY KEY,
+  roster_id     TEXT NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
+  meeting_id    TEXT NOT NULL,
+  passcode      TEXT,
+  room_name     TEXT NOT NULL,
+  room_color    TEXT NOT NULL DEFAULT '#ef4444',
+  bot_name      TEXT NOT NULL,
+  display_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_rosters_tenant       ON rosters(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_roster_entries_order ON roster_entries(roster_id, display_order);
+
 -- Tenant id placeholder on existing tables. Default value is a stand-in
 -- until multi-tenant auth lands; the migration to real org ids is then
 -- "UPDATE … SET tenant_id = <real org>", not a schema change. See

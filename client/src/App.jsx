@@ -9,6 +9,7 @@ import MeetingManager from './components/MeetingManager';
 import ModerationPanel from './components/ModerationPanel';
 import SavedPanel from './components/SavedPanel';
 import SessionHeader from './components/SessionHeader';
+import RostersPanel from './components/RostersPanel';
 import { useSaved } from './contexts/SavedContext';
 
 function App() {
@@ -21,7 +22,7 @@ function App() {
     setSelectedRoom
   } = useSocketContext();
 
-  const [activePanel, setActivePanel] = useState('connect'); // 'connect', 'moderate', 'rooms', 'saved'
+  const [activePanel, setActivePanel] = useState('connect'); // 'connect', 'rosters', 'moderate', 'rooms', 'saved'
 
   const { settings, setSettingsPanelOpen } = useSettings();
   const { savedMessages } = useSaved();
@@ -145,6 +146,20 @@ function App() {
                 Connect
               </button>
               <button
+                onClick={() => setActivePanel('rosters')}
+                className={`flex-1 py-3 px-2 text-xs font-medium transition-colors ${
+                  activePanel === 'rosters'
+                    ? 'border-b-2 opacity-100'
+                    : 'opacity-60 hover:opacity-80'
+                }`}
+                style={{
+                  borderColor: activePanel === 'rosters' ? 'var(--accent-color)' : 'transparent',
+                  color: activePanel === 'rosters' ? 'var(--accent-color)' : 'inherit'
+                }}
+              >
+                Rosters
+              </button>
+              <button
                 onClick={() => setActivePanel('moderate')}
                 className={`flex-1 py-3 px-2 text-xs font-medium transition-colors ${
                   activePanel === 'moderate'
@@ -191,6 +206,7 @@ function App() {
             {/* Panel Content */}
             <div className="flex-1 overflow-y-auto">
               {activePanel === 'connect' && <MeetingManager />}
+              {activePanel === 'rosters' && <RostersPanel />}
               {activePanel === 'moderate' && <ModerationPanel />}
               {activePanel === 'rooms' && (
                 <div className="p-4">

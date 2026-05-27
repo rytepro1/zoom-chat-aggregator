@@ -9,6 +9,7 @@ import webhookRoutes from '../routes/webhook.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { MessageAggregator } from '../services/MessageAggregator.js';
 import { SessionManager } from '../services/SessionManager.js';
+import { RosterManager } from '../services/RosterManager.js';
 import { RTMSManager } from '../rtms/RTMSManager.js';
 import { RecallBotManager } from '../recall/RecallBotManager.js';
 import { initDatabase } from '../db/index.js';
@@ -41,6 +42,7 @@ const io = new Server(httpServer, {
 // when 500 newer ones arrive).
 const messageAggregator = new MessageAggregator(io);
 const sessionManager = new SessionManager({ io });
+const rosterManager = new RosterManager();
 
 // Initialize RTMS manager (legacy / mock fallback)
 const rtmsManager = new RTMSManager(messageAggregator);
@@ -60,6 +62,7 @@ const useRecall = recallBotManager.isConfigured();
 // Make managers available to routes
 app.set('messageAggregator', messageAggregator);
 app.set('sessionManager', sessionManager);
+app.set('rosterManager', rosterManager);
 app.set('rtmsManager', rtmsManager);
 app.set('recallBotManager', recallBotManager);
 app.set('io', io);
@@ -395,6 +398,149 @@ app.post('/api/meetings/:meetingId/reply', async (req, res) => {
   }
 });
 
+// ============================================
+// ROSTERS — pre-built lists of meetings the operator can deploy in
+// one click. Saves typing meeting IDs/passcodes/bot names for every
+// recurring event, and makes quit-and-rejoin a single button press.
+// ============================================
+
+app.get('/api/rosters', async (req, res) => {
+  if (!rosterManager.isAvailable()) {
+    return res.json({ rosters: [] });
+  }
+  try {
+    const rosters = await rosterManager.list();
+    res.json({ rosters });
+  } catch (err) {
+    console.error('GET /api/rosters failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/rosters/:id', async (req, res) => {
+  try {
+    const roster = await rosterManager.get(req.params.id);
+    if (!roster) return res.status(404).json({ error: 'Roster not found' });
+    res.json({ roster });
+  } catch (err) {
+    console.error(`GET /api/rosters/${req.params.id} failed:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/rosters', async (req, res) => {
+  if (!rosterManager.isAvailable()) {
+    return res.status(503).json({ error: 'Roster storage requires the database (set DATABASE_URL).' });
+  }
+  const { name, entries = [] } = req.body || {};
+  try {
+    rosterManager.validateEntries(entries);
+    const roster = await rosterManager.create({ name, entries });
+    res.status(201).json({ roster });
+  } catch (err) {
+    console.error('POST /api/rosters failed:', err);
+    res.status(/required|empty|invalid/i.test(err.message) ? 400 : 500)
+       .json({ error: err.message });
+  }
+});
+
+app.patch('/api/rosters/:id', async (req, res) => {
+  if (!rosterManager.isAvailable()) {
+    return res.status(503).json({ error: 'Roster storage requires the database.' });
+  }
+  const { name, entries } = req.body || {};
+  try {
+    if (Array.isArray(entries)) rosterManager.validateEntries(entries);
+    const roster = await rosterManager.update(req.params.id, { name, entries });
+    if (!roster) return res.status(404).json({ error: 'Roster not found' });
+    res.json({ roster });
+  } catch (err) {
+    console.error(`PATCH /api/rosters/${req.params.id} failed:`, err);
+    res.status(/required|empty|invalid/i.test(err.message) ? 400 : 500)
+       .json({ error: err.message });
+  }
+});
+
+app.delete('/api/rosters/:id', async (req, res) => {
+  if (!rosterManager.isAvailable()) {
+    return res.status(503).json({ error: 'Roster storage requires the database.' });
+  }
+  try {
+    const removed = await rosterManager.delete(req.params.id);
+    if (!removed) return res.status(404).json({ error: 'Roster not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(`DELETE /api/rosters/${req.params.id} failed:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * One-click deploy: fetches the roster, dispatches a bot for each
+ * entry in parallel via the existing Recall path. Returns per-entry
+ * success/failure so the UI can show "4 of 5 connected, 1 failed: <error>".
+ *
+ * Already-connected meetings (operator deployed twice or manually
+ * connected first) hit RecallBotManager.connect's dedup and are
+ * reported as ok=true (no new bot dispatched, no duplicate Recall cost).
+ */
+app.post('/api/rosters/:id/deploy', async (req, res) => {
+  if (!useRecall) {
+    return res.status(503).json({ error: 'Deploy requires the Recall path (currently in mock mode).' });
+  }
+  try {
+    const roster = await rosterManager.get(req.params.id);
+    if (!roster) return res.status(404).json({ error: 'Roster not found' });
+    if (roster.entries.length === 0) {
+      return res.status(400).json({ error: 'Roster has no meetings to deploy' });
+    }
+
+    const results = await Promise.allSettled(
+      roster.entries.map(async (entry) => {
+        await recallBotManager.connect(
+          entry.meeting_id,
+          entry.passcode,
+          entry.room_name,
+          entry.room_color,
+          entry.bot_name
+        );
+        messageAggregator.addRoom({
+          id: entry.meeting_id,
+          name: entry.room_name,
+          color: entry.room_color,
+          participantCount: 0,
+        });
+        io.emit('meetingConnected', {
+          id: entry.meeting_id,
+          meetingId: entry.meeting_id,
+          roomName: entry.room_name,
+          roomColor: entry.room_color,
+          status: 'connected',
+          isMock: false,
+        });
+        return { meetingId: entry.meeting_id, roomName: entry.room_name };
+      })
+    );
+
+    const detailed = results.map((r, i) => ({
+      meetingId: roster.entries[i].meeting_id,
+      roomName: roster.entries[i].room_name,
+      ok: r.status === 'fulfilled',
+      error: r.status === 'rejected' ? (r.reason?.message || String(r.reason)) : null,
+    }));
+
+    res.json({
+      total: roster.entries.length,
+      succeeded: detailed.filter(d => d.ok).length,
+      failed: detailed.filter(d => !d.ok).length,
+      results: detailed,
+    });
+  } catch (err) {
+    console.error(`POST /api/rosters/${req.params.id}/deploy failed:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Broadcast the same text to every active bot. Body: { text }.
 app.post('/api/broadcast', async (req, res) => {
   if (!useRecall) {
@@ -505,6 +651,7 @@ async function start() {
   // (groundwork for SaaS billing — see docs/MONETIZATION-PLAN.md).
   recallBotManager.db = db;
   recallBotManager.sessionManager = sessionManager;
+  rosterManager.db = db;
 
   // 2. Reopen the most recent un-ended session, or create a new one.
   await sessionManager.init();
