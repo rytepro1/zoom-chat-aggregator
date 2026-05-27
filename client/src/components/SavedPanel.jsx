@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import { toPng } from 'html-to-image';
 import { useSaved } from '../contexts/SavedContext';
+import QuoteCard from './QuoteCard';
 
 const API_URL = import.meta.env.DEV
   ? 'http://localhost:3001'
@@ -14,6 +16,11 @@ const API_URL = import.meta.env.DEV
 function SavedPanel() {
   const { savedMessages, unsaveMessage } = useSaved();
   const [copiedId, setCopiedId] = useState(null);
+  // PNG export: render the QuoteCard into a hidden DOM slot for the
+  // message we're currently exporting, capture it, throw it away.
+  const [exportingMessage, setExportingMessage] = useState(null);
+  const [pngBusyId, setPngBusyId] = useState(null);
+  const cardRef = useRef(null);
 
   const copyAsText = (m) => {
     const text = `"${m.content}" — ${m.sender} (${m.room})${m.timestamp ? `, ${formatTime(m.timestamp)}` : ''}`;
@@ -21,6 +28,34 @@ function SavedPanel() {
       setCopiedId(m.id);
       setTimeout(() => setCopiedId(prev => (prev === m.id ? null : prev)), 1500);
     });
+  };
+
+  const exportAsPng = async (m) => {
+    setPngBusyId(m.id);
+    setExportingMessage(m);
+    // Two RAFs to make sure the card has rendered with its full styles
+    // before we snapshot it (one tick to commit the React render, a
+    // second to let the browser lay out the new DOM).
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    try {
+      if (!cardRef.current) throw new Error('card ref missing');
+      const dataUrl = await toPng(cardRef.current, {
+        pixelRatio: 2,           // crisp on retina; final PNG is 2160x2160
+        cacheBust: true,
+        backgroundColor: '#0f0f23',
+      });
+      const safeSender = (m.sender || 'quote').replace(/[^a-zA-Z0-9]+/g, '-').slice(0, 32);
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `zoomchat-${safeSender}-${m.id.slice(0, 8)}.png`;
+      a.click();
+    } catch (err) {
+      console.error('PNG export failed:', err);
+      alert('PNG export failed: ' + (err.message || 'unknown error'));
+    } finally {
+      setExportingMessage(null);
+      setPngBusyId(null);
+    }
   };
 
   const downloadCsv = () => {
@@ -110,6 +145,15 @@ function SavedPanel() {
                     {copiedId === m.id ? 'Copied!' : 'Copy text'}
                   </button>
                   <button
+                    onClick={() => exportAsPng(m)}
+                    disabled={pngBusyId === m.id}
+                    className="text-xs py-1.5 px-2 rounded transition-colors bg-white/10 hover:bg-white/20 disabled:opacity-50"
+                    style={{ color: 'var(--text-color)' }}
+                    title="Download as a 1080×1080 branded quote card (PNG)"
+                  >
+                    {pngBusyId === m.id ? '…' : 'PNG'}
+                  </button>
+                  <button
                     onClick={() => unsaveMessage(m.id).catch(console.error)}
                     className="text-xs py-1.5 px-2 rounded transition-colors text-red-400 hover:bg-red-500/20"
                     title="Remove from saved"
@@ -121,6 +165,25 @@ function SavedPanel() {
             ))}
           </div>
         </>
+      )}
+
+      {/* Off-screen render target for PNG export. Positioned far off the
+          visible viewport with pointer-events disabled so it never
+          interferes with the actual SavedPanel UI. html-to-image walks
+          this DOM subtree to produce the downloadable PNG. */}
+      {exportingMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            left: -20000,
+            top: 0,
+            pointerEvents: 'none',
+            zIndex: -1,
+          }}
+          aria-hidden="true"
+        >
+          <QuoteCard ref={cardRef} message={exportingMessage} />
+        </div>
       )}
     </div>
   );
