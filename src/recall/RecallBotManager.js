@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * RecallBotManager — Path A from docs/CHAT-CAPTURE-ARCHITECTURE.md.
  *
@@ -87,11 +89,17 @@ function describeRecallError(status, body) {
 }
 
 export class RecallBotManager {
-  constructor({ messageAggregator, apiKey, apiBase, publicWebhookUrl }) {
+  constructor({ messageAggregator, apiKey, apiBase, publicWebhookUrl, db, sessionManager } = {}) {
     this.messageAggregator = messageAggregator;
     this.apiKey = apiKey || '';
     this.apiBase = (apiBase || 'https://us-east-1.recall.ai/api/v1').replace(/\/+$/, '');
     this.publicWebhookUrl = (publicWebhookUrl || '').replace(/\/+$/, '');
+    // Optional — when present, every dispatched bot writes a bot_usage
+    // row that gets closed out by /webhook/recall/status (or by
+    // disconnect()). Foundation for the eventual SaaS billing layer;
+    // safe to leave null in dev / in-memory mode.
+    this.db = db || null;
+    this.sessionManager = sessionManager || null;
 
     // Two-way mapping. botsByMeeting holds the canonical record; meetingsByBot
     // is a reverse index used when an inbound webhook only carries a bot id.
@@ -126,17 +134,27 @@ export class RecallBotManager {
       meetingUrl += `?pwd=${encodeURIComponent(String(passcode).trim())}`;
     }
 
-    const webhookUrl = `${this.publicWebhookUrl}/webhook/recall/chat`;
+    const chatWebhookUrl   = `${this.publicWebhookUrl}/webhook/recall/chat`;
+    const statusWebhookUrl = `${this.publicWebhookUrl}/webhook/recall/status`;
 
     const body = {
       meeting_url: meetingUrl,
       bot_name: 'Chat Capture by RYTE Productions',
       recording_config: {
         realtime_endpoints: [
+          // Chat events go to the chat handler.
           {
             type: 'webhook',
-            url: webhookUrl,
+            url: chatWebhookUrl,
             events: ['participant_events.chat_message'],
+          },
+          // Bot lifecycle events go to the status handler, which closes
+          // bot_usage rows for billing once the bot reaches a terminal
+          // state. Separate URL keeps each handler focused.
+          {
+            type: 'webhook',
+            url: statusWebhookUrl,
+            events: ['bot.status_change'],
           },
         ],
       },
@@ -181,6 +199,22 @@ export class RecallBotManager {
     this.botsByMeeting.set(meetingId, botInfo);
     this.meetingsByBot.set(botId, meetingId);
 
+    // Persist a usage record so the eventual billing layer can sum
+    // bot-hours per tenant per month. The status webhook (or our own
+    // disconnect()) closes the row.
+    if (this.db) {
+      try {
+        const sessionId = this.sessionManager?.current?.id ?? null;
+        await this.db.query(
+          `INSERT INTO bot_usage (id, recall_bot_id, meeting_id, session_id)
+           VALUES ($1, $2, $3, $4)`,
+          [randomUUID(), botId, meetingId, sessionId]
+        );
+      } catch (err) {
+        console.error('[Recall] bot_usage INSERT failed (bot still dispatched):', err.message);
+      }
+    }
+
     console.log(`[Recall] Bot ${botId} dispatched to meeting ${meetingId} (${roomName})`);
     return botInfo;
   }
@@ -219,6 +253,28 @@ export class RecallBotManager {
 
     this.botsByMeeting.delete(meetingId);
     this.meetingsByBot.delete(botId);
+
+    // Close the usage row immediately. The status webhook will likely
+    // also fire (we'd be a no-op via COALESCE), but operator-initiated
+    // disconnects shouldn't wait on Recall round-tripping us.
+    if (this.db) {
+      try {
+        await this.db.query(
+          `UPDATE bot_usage
+              SET left_at          = COALESCE(left_at, NOW()),
+                  duration_seconds = COALESCE(
+                    duration_seconds,
+                    CAST(EXTRACT(EPOCH FROM (NOW() - joined_at)) AS INTEGER)
+                  ),
+                  last_status      = COALESCE(last_status, 'disconnected_by_operator')
+            WHERE recall_bot_id = $1`,
+          [botId]
+        );
+      } catch (err) {
+        console.error('[Recall] bot_usage close on disconnect failed:', err.message);
+      }
+    }
+
     console.log(`[Recall] Bot ${botId} removed from meeting ${meetingId}`);
   }
 
@@ -280,5 +336,67 @@ export class RecallBotManager {
       timestamp: chat.timestamp || new Date().toISOString(),
       type: 'chat',
     });
+  }
+
+  /**
+   * Called by /webhook/recall/status. Updates the bot_usage row for
+   * this bot: always records last_status, and on terminal states
+   * (done / fatal) closes left_at + duration_seconds. Idempotent via
+   * COALESCE so the operator-initiated disconnect path doesn't get
+   * stomped if the webhook arrives later.
+   */
+  async handleStatusChangeEvent(payload) {
+    if (!this.db) return;
+
+    const botId =
+      payload?.bot?.id ||
+      payload?.bot_id ||
+      payload?.data?.bot?.id ||
+      payload?.data?.bot_id ||
+      payload?.data?.data?.bot?.id ||
+      null;
+
+    // Recall labels the new status under a few possible keys depending
+    // on envelope version; probe a few likely paths.
+    const statusRaw =
+      payload?.data?.data?.code ||
+      payload?.data?.data?.status ||
+      payload?.data?.code ||
+      payload?.data?.status ||
+      payload?.code ||
+      payload?.status ||
+      null;
+    const status = statusRaw ? String(statusRaw).toLowerCase() : null;
+
+    if (!botId) {
+      console.warn('[Recall] handleStatusChangeEvent: no bot id in payload');
+      return;
+    }
+
+    const terminal = status === 'done' || status === 'fatal';
+
+    try {
+      if (terminal) {
+        await this.db.query(
+          `UPDATE bot_usage
+              SET left_at          = COALESCE(left_at, NOW()),
+                  duration_seconds = COALESCE(
+                    duration_seconds,
+                    CAST(EXTRACT(EPOCH FROM (NOW() - joined_at)) AS INTEGER)
+                  ),
+                  last_status      = $2
+            WHERE recall_bot_id = $1`,
+          [botId, status]
+        );
+        console.log(`[Recall] bot_usage closed for ${botId} (${status})`);
+      } else if (status) {
+        await this.db.query(
+          `UPDATE bot_usage SET last_status = $2 WHERE recall_bot_id = $1`,
+          [botId, status]
+        );
+      }
+    } catch (err) {
+      console.error('[Recall] handleStatusChangeEvent DB error:', err.message);
+    }
   }
 }

@@ -41,6 +41,38 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_saved      ON messages(saved) WHERE saved = TRUE;
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp  ON messages(timestamp);
+
+-- Per-bot usage tracking for the eventual SaaS billing layer.
+-- Populated by RecallBotManager.connect (joined_at) and updated by
+-- /webhook/recall/status when the bot reaches a terminal state, OR by
+-- RecallBotManager.disconnect when the operator removes the bot manually.
+-- See docs/MONETIZATION-PLAN.md.
+CREATE TABLE IF NOT EXISTS bot_usage (
+  id                TEXT PRIMARY KEY,
+  recall_bot_id     TEXT NOT NULL,
+  meeting_id        TEXT,
+  session_id        TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  tenant_id         TEXT NOT NULL DEFAULT 'ryteproductions',
+  joined_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  left_at           TIMESTAMPTZ,
+  duration_seconds  INTEGER,
+  last_status       TEXT,
+  billed            BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_usage_recall_bot_id ON bot_usage(recall_bot_id);
+CREATE INDEX IF NOT EXISTS idx_bot_usage_session       ON bot_usage(session_id);
+CREATE INDEX IF NOT EXISTS idx_bot_usage_billing       ON bot_usage(tenant_id, billed, left_at);
+
+-- Tenant id placeholder on existing tables. Default value is a stand-in
+-- until multi-tenant auth lands; the migration to real org ids is then
+-- "UPDATE … SET tenant_id = <real org>", not a schema change. See
+-- docs/MONETIZATION-PLAN.md, "What we could do right now to make
+-- Phase 1 easier later".
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'ryteproductions';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'ryteproductions';
+CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_messages_tenant ON messages(tenant_id);
 `;
 
 /**

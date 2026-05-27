@@ -189,4 +189,36 @@ router.post('/recall/chat', (req, res) => {
   res.status(200).json({ received: true });
 });
 
+/**
+ * Recall.ai bot lifecycle webhook — receives `bot.status_change` events.
+ * Used to close the bot_usage row (set left_at + duration_seconds) when
+ * a bot reaches a terminal state (done / fatal), which feeds the SaaS
+ * billing layer per docs/MONETIZATION-PLAN.md. Same signature
+ * verification as /recall/chat; same 200-always policy.
+ */
+router.post('/recall/status', (req, res) => {
+  const recallBotManager = req.app.get('recallBotManager');
+  if (!recallBotManager) {
+    return res.status(503).json({ error: 'Recall manager not initialized' });
+  }
+
+  const secret = process.env.RECALL_WEBHOOK_SECRET;
+  if (secret) {
+    const result = verifyRecallWebhook(req.headers, req.rawBody, secret);
+    if (!result.ok) {
+      console.warn(`[Recall status webhook] rejected: ${result.reason}`);
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+  } else {
+    console.warn('[Recall status webhook] RECALL_WEBHOOK_SECRET not set — accepting without verification');
+  }
+
+  // Fire-and-forget — the handler is async but we don't need to block
+  // the 200 response on the DB write.
+  Promise.resolve(recallBotManager.handleStatusChangeEvent(req.body))
+    .catch(err => console.error('[Recall status webhook] handler error:', err));
+
+  res.status(200).json({ received: true });
+});
+
 export default router;

@@ -47,6 +47,8 @@ const rtmsManager = new RTMSManager(messageAggregator);
 
 // Initialize Recall.ai bot manager. Active only when both RECALL_API_KEY
 // and PUBLIC_WEBHOOK_URL are configured; otherwise we fall back to RTMS.
+// db + sessionManager are wired in below (after async DB init) so
+// bot-usage rows can be persisted for billing.
 const recallBotManager = new RecallBotManager({
   messageAggregator,
   apiKey: process.env.RECALL_API_KEY,
@@ -408,6 +410,10 @@ async function start() {
   const db = await initDatabase({ databaseUrl: process.env.DATABASE_URL });
   messageAggregator.db = db;
   sessionManager.db = db;
+  // RecallBotManager uses db+sessionManager for bot_usage tracking
+  // (groundwork for SaaS billing — see docs/MONETIZATION-PLAN.md).
+  recallBotManager.db = db;
+  recallBotManager.sessionManager = sessionManager;
 
   // 2. Reopen the most recent un-ended session, or create a new one.
   await sessionManager.init();
