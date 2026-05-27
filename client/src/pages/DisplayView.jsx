@@ -98,9 +98,11 @@ function DisplayViewContent({ socket }) {
         color: 'var(--text-color)',
         fontFamily: 'var(--font-family)',
         fontSize: 'var(--base-font-size)',
-        // Visible cursor by default; auto-hides after 3s of no movement
-        // (the existing showControls timer drives the same idle state).
-        cursor: showControls ? 'default' : 'none',
+        // Cursor stays visible — operator needs it to drag the
+        // borderless window into position, and a tiny arrow in the
+        // corner during a live event is unobtrusive enough that the
+        // on-air host won't be distracted.
+        cursor: 'default',
       }}
       onMouseMove={handleMouseMove}
     >
