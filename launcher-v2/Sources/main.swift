@@ -27,8 +27,23 @@ struct ZoomChatApp: App {
         .commands {
             // Drop unused menu items that don't apply to a kiosk-style app.
             CommandGroup(replacing: .newItem) {}
+
+            // ⌘R = reload the WebView. Important whenever the operator
+            // needs the latest deploy without quitting the app — every
+            // production push happens server-side so a reload is the
+            // single-tap "pull latest" gesture.
+            CommandGroup(after: .toolbar) {
+                Button("Reload") {
+                    NotificationCenter.default.post(name: .reloadWebView, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: .command)
+            }
         }
     }
+}
+
+extension Notification.Name {
+    static let reloadWebView = Notification.Name("ZoomChatReloadWebView")
 }
 
 // MARK: - App delegate
@@ -129,6 +144,11 @@ struct WebView: NSViewRepresentable {
         webView.uiDelegate = context.coordinator
         webView.load(URLRequest(url: url))
         webView.setValue(false, forKey: "drawsBackground")
+
+        // Hand the WebView reference to the coordinator so the ⌘R
+        // command can trigger a cache-busting reload.
+        context.coordinator.webView = webView
+        context.coordinator.url = url
         return webView
     }
 
@@ -140,6 +160,43 @@ struct WebView: NSViewRepresentable {
 // MARK: - window.open handling
 
 final class WebViewCoordinator: NSObject, WKUIDelegate {
+    /// Held weakly to avoid a retain cycle; SwiftUI owns the actual
+    /// WKWebView lifetime.
+    weak var webView: WKWebView?
+    var url: URL?
+
+    override init() {
+        super.init()
+        // Subscribe to ⌘R command from the menu. Reload the main URL
+        // (bypassing HTTP cache) so fresh deploys land immediately.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(reloadMain),
+            name: .reloadWebView,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func reloadMain() {
+        guard let webView = webView else { return }
+        if let url = url {
+            // reloadFromOrigin() forces revalidation of the page itself
+            // but cached subresources (the JS bundle) may still be
+            // stale. Loading the URL with a no-cache policy forces a
+            // fresh GET of the HTML, which references the new hashed
+            // JS file → fresh JS gets fetched too.
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            webView.load(request)
+        } else {
+            webView.reloadFromOrigin()
+        }
+    }
+
     func webView(
         _ webView: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,
