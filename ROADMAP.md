@@ -124,12 +124,23 @@ The smart exit dialog asks the operator — but the server could also
 auto-suggest "the session has been idle for N minutes, end it?" Could
 be a websocket nudge in the React UI.
 
-### Operator authentication / multi-tenant
-Right now the Railway URL is open to anyone who has it. Fine for a
-single-team tool but a blocker for licensing to others. Would need:
-login, per-org session isolation, per-org Recall workspace credentials.
-Substantial work — only worth doing if there's a real outside customer
-asking.
+### Multi-tenant SaaS / monetization
+Full plan in [`docs/MONETIZATION-PLAN.md`](docs/MONETIZATION-PLAN.md).
+TL;DR: charge customers per bot-hour with tiered subscriptions to
+cover Recall costs + margin. Requires multi-tenant auth (Clerk
+recommended), usage tracking (Recall `bot.status_change` webhooks),
+and Stripe Billing. ~4–6 weeks of dev + ~2 weeks of legal/policy to
+go from current state to "charging real customers." Not urgent —
+gather real-event usage data first, then commit to the rebuild.
+
+Two no-regret moves that make the eventual rebuild easier and can
+land any time:
+- Subscribe to Recall's `bot.status_change` webhook, log join/leave
+  times to a simple table. Builds a real-bot-hour dataset to inform
+  pricing decisions.
+- Add a `tenant_id` placeholder column to sessions / messages /
+  saved (default to a constant). Schema migration to real org_ids
+  later becomes a one-line UPDATE.
 
 ### "Hide cursor in showtime" toggle
 Removed the auto-hide-after-3s during the revival because it clashed
