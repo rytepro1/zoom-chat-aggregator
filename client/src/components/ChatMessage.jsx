@@ -61,7 +61,11 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
     spacious: 'p-4',
   };
 
-  // Display mode: cleaner, larger text for video walls
+  // Display mode: cleaner, larger text for video walls. Font sizes are
+  // driven by the operator's typography settings (--message-font-size)
+  // multiplied by --display-scale, so the slider in the main window
+  // changes the display window's text size in real time (storage event
+  // sync from SettingsContext keeps both windows in lockstep).
   if (displayMode) {
     return (
       <div
@@ -75,16 +79,20 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-3 mb-1">
             <span
-              className="font-bold text-xl"
-              style={{ color: 'var(--text-color)' }}
+              className="font-bold"
+              style={{
+                color: 'var(--text-color)',
+                fontSize: 'calc(var(--message-font-size, 16px) * var(--display-scale, 1.5))',
+              }}
             >
               {message.sender}
             </span>
             <span
-              className="text-sm px-2 py-0.5 rounded"
+              className="px-2 py-0.5 rounded"
               style={{
                 backgroundColor: roomColor,
                 color: 'white',
+                fontSize: 'calc(var(--message-font-size, 16px) * var(--display-scale, 1.5) * 0.7)',
               }}
             >
               {message.room}
@@ -98,10 +106,11 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
             )}
           </div>
           <p
-            className="text-xl leading-relaxed"
+            className="leading-relaxed"
             style={{
               color: 'var(--text-color)',
               opacity: 0.95,
+              fontSize: 'calc(var(--message-font-size, 16px) * var(--display-scale, 1.5))',
             }}
           >
             {message.content}

@@ -118,6 +118,19 @@ function SettingsPanel() {
               max={24}
               onChange={(v) => updateSetting('baseFontSize', v)}
             />
+            <SelectOption
+              label="Display View Scale"
+              value={String(settings.displayScale ?? 1.5)}
+              options={[
+                { value: '1',    label: '1× (Same as main)' },
+                { value: '1.25', label: '1.25×' },
+                { value: '1.5',  label: '1.5× (Default)' },
+                { value: '2',    label: '2×' },
+                { value: '2.5',  label: '2.5×' },
+                { value: '3',    label: '3× (TV across studio)' },
+              ]}
+              onChange={(v) => updateSetting('displayScale', Number(v))}
+            />
           </Section>
 
           {/* Display Options */}

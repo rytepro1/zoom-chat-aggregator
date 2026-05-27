@@ -21,21 +21,28 @@ export function MeetingsProvider({ children, socket }) {
 
     socket.on('meetingConnected', (meeting) => {
       setMeetings(prev => {
-        const exists = prev.find(m => m.id === meeting.id);
-        if (exists) {
-          return prev.map(m => m.id === meeting.id ? { ...m, ...meeting } : m);
+        // Match by either id or meetingId — the optimistic add and the
+        // server event use the cleaned meeting ID for both, but match
+        // both fields to be safe.
+        const idx = prev.findIndex(m =>
+          m.id === meeting.id || m.meetingId === meeting.meetingId
+        );
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...meeting };
+          return next;
         }
         return [...prev, meeting];
       });
     });
 
     socket.on('meetingDisconnected', ({ id }) => {
-      setMeetings(prev => prev.filter(m => m.id !== id));
+      setMeetings(prev => prev.filter(m => m.id !== id && m.meetingId !== id));
     });
 
     socket.on('meetingStatus', ({ id, status }) => {
       setMeetings(prev =>
-        prev.map(m => m.id === id ? { ...m, status } : m)
+        prev.map(m => (m.id === id || m.meetingId === id) ? { ...m, status } : m)
       );
     });
 
@@ -71,15 +78,31 @@ export function MeetingsProvider({ children, socket }) {
       throw new Error(data.error || 'Failed to connect to meeting');
     }
 
-    // Add to local state immediately
-    setMeetings(prev => [...prev, {
-      id: data.id || meetingId,
-      meetingId,
-      roomName,
-      roomColor,
-      status: 'connecting',
-      isMock: data.isMock || false
-    }]);
+    // Add to local state immediately. The socket `meetingConnected`
+    // event can land before this HTTP response resolves, so we have to
+    // dedup — otherwise we'd render the same meeting twice (one
+    // "connected" from the socket, one stale "connecting" from here).
+    setMeetings(prev => {
+      const id = data.id || meetingId;
+      const existing = prev.find(m => m.id === id || m.meetingId === meetingId);
+      if (existing) {
+        // Refresh fields the user typed (roomName/roomColor) but keep
+        // status from the socket event if it already arrived.
+        return prev.map(m =>
+          (m.id === id || m.meetingId === meetingId)
+            ? { ...m, roomName, roomColor, isMock: data.isMock || false }
+            : m
+        );
+      }
+      return [...prev, {
+        id,
+        meetingId,
+        roomName,
+        roomColor,
+        status: 'connecting',
+        isMock: data.isMock || false,
+      }];
+    });
 
     return data;
   }, []);

@@ -25,6 +25,10 @@ const defaultSettings = {
   sidebarVisible: true,
   headerVisible: true,
   fullScreenMode: false,
+  // Multiplier applied to font sizes in the pop-out display view (the
+  // on-air host's confidence monitor). 1.5x is a good default for a TV
+  // viewed from a few feet away.
+  displayScale: 1.5,
 
   // Branding
   appTitle: 'Zoom Chat Aggregator',
@@ -95,7 +99,32 @@ export function SettingsProvider({ children }) {
       spacious: '16px',
     };
     root.style.setProperty('--message-spacing', spacings[settings.messageSpacing] || '8px');
+
+    // Display-view font multiplier (consumed by ChatMessage displayMode).
+    root.style.setProperty('--display-scale', String(settings.displayScale ?? 1.5));
   }, [settings]);
+
+  // Cross-window settings sync. The `storage` event fires in OTHER windows
+  // of the same origin when one window writes to localStorage. This lets
+  // settings changes in the main control panel propagate to the pop-out
+  // display view (which lives in a separate window with its own context).
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key !== 'chatAggregatorSettings' || !e.newValue) return;
+      try {
+        const incoming = JSON.parse(e.newValue);
+        setSettings(prev => {
+          // Avoid setting if structurally identical (prevents re-render loops).
+          if (JSON.stringify(prev) === e.newValue) return prev;
+          return { ...defaultSettings, ...incoming };
+        });
+      } catch {
+        // ignore malformed payloads
+      }
+    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
+  }, []);
 
   const updateSetting = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
