@@ -8,8 +8,10 @@ import { dirname, join } from 'path';
 import webhookRoutes from '../routes/webhook.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { MessageAggregator } from '../services/MessageAggregator.js';
+import { SessionManager } from '../services/SessionManager.js';
 import { RTMSManager } from '../rtms/RTMSManager.js';
 import { RecallBotManager } from '../recall/RecallBotManager.js';
+import { initDatabase } from '../db/index.js';
 
 // Load environment variables
 dotenv.config();
@@ -30,8 +32,15 @@ const io = new Server(httpServer, {
   }
 });
 
-// Initialize message aggregator
+// Initialize message aggregator + session manager. The DB connection and
+// session hydration happen asynchronously in start() below; the
+// aggregator's `db` and `sessionManager` fields get patched in once
+// they're ready. addMessage() guards on those being present, so messages
+// arriving during the brief startup window are still served live —
+// they just won't be persisted (and will fall out of the in-memory ring
+// when 500 newer ones arrive).
 const messageAggregator = new MessageAggregator(io);
+const sessionManager = new SessionManager({ io });
 
 // Initialize RTMS manager (legacy / mock fallback)
 const rtmsManager = new RTMSManager(messageAggregator);
@@ -48,6 +57,7 @@ const useRecall = recallBotManager.isConfigured();
 
 // Make managers available to routes
 app.set('messageAggregator', messageAggregator);
+app.set('sessionManager', sessionManager);
 app.set('rtmsManager', rtmsManager);
 app.set('recallBotManager', recallBotManager);
 app.set('io', io);
@@ -206,6 +216,118 @@ app.post('/api/meetings/:id/disconnect', async (req, res) => {
 });
 
 // ============================================
+// SESSIONS + SAVED MESSAGES
+// ============================================
+
+// Current session info (always returns a session — server auto-starts one).
+app.get('/api/sessions/current', (req, res) => {
+  res.json({ session: sessionManager.getCurrent() });
+});
+
+// Full list of sessions, most recent first, with message counts. Lets a
+// future UI browse past events.
+app.get('/api/sessions', async (req, res) => {
+  try {
+    const sessions = await sessionManager.list({ limit: 100 });
+    res.json({ sessions });
+  } catch (err) {
+    console.error('GET /api/sessions failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// End the current session (closes its log) and immediately start a new
+// one. The new session's name can be supplied; otherwise a date-stamped
+// default is used.
+app.post('/api/sessions/end', async (req, res) => {
+  try {
+    const newSession = await sessionManager.end({ newSessionName: req.body?.newSessionName });
+    // Reset the in-memory ring buffer for the new session — clients
+    // will see a fresh feed when they subscribe again.
+    messageAggregator.clearMessages();
+    res.json({ session: newSession });
+  } catch (err) {
+    console.error('POST /api/sessions/end failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark a message as saved (with optional one-line note).
+app.post('/api/messages/:id/save', async (req, res) => {
+  const { id } = req.params;
+  const note = req.body?.note ?? null;
+  try {
+    const message = await messageAggregator.setSaved(id, true, note);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    res.json({ message });
+  } catch (err) {
+    console.error(`POST /api/messages/${id}/save failed:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Unmark a saved message.
+app.delete('/api/messages/:id/save', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const message = await messageAggregator.setSaved(id, false, null);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+    res.json({ message });
+  } catch (err) {
+    console.error(`DELETE /api/messages/${id}/save failed:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// All saved messages for the given session (defaults to current).
+app.get('/api/saved', async (req, res) => {
+  const sessionId = req.query.session_id || undefined;
+  try {
+    const messages = await messageAggregator.getSavedMessages({ sessionId });
+    res.json({ messages });
+  } catch (err) {
+    console.error('GET /api/saved failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CSV export of saved messages — operators paste straight into a sheet.
+app.get('/api/saved/export.csv', async (req, res) => {
+  const sessionId = req.query.session_id || undefined;
+  try {
+    const messages = await messageAggregator.getSavedMessages({ sessionId });
+    const rows = [
+      ['timestamp', 'room', 'sender', 'content', 'note'],
+      ...messages.map(m => [
+        m.timestamp,
+        m.room,
+        m.sender,
+        m.content,
+        m.note || '',
+      ]),
+    ];
+    const csv = rows
+      .map(row => row.map(csvEscape).join(','))
+      .join('\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="zoomchat-saved.csv"');
+    res.send(csv);
+  } catch (err) {
+    console.error('GET /api/saved/export.csv failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function csvEscape(value) {
+  if (value == null) return '';
+  const s = String(value);
+  if (/[",\n\r]/.test(s)) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+// ============================================
 // DEVELOPMENT/TESTING ENDPOINTS
 // These let you test without actual Zoom connection
 // ============================================
@@ -261,11 +383,30 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-// Start server
+// Start server. Async wrapper so we can await DB + session init before
+// taking traffic — that way the very first message of a session lands
+// in the DB instead of falling through the persistence gap.
 const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, () => {
-  const botPath = useRecall ? 'Recall.ai' : `RTMS (${rtmsManager.useMockMode ? 'mock mode' : 'live'})`;
-  console.log(`
+
+async function start() {
+  // 1. Connect to Postgres (optional — falls back to in-memory only).
+  const db = await initDatabase({ databaseUrl: process.env.DATABASE_URL });
+  messageAggregator.db = db;
+  sessionManager.db = db;
+
+  // 2. Reopen the most recent un-ended session, or create a new one.
+  await sessionManager.init();
+  messageAggregator.sessionManager = sessionManager;
+
+  // 3. Hydrate the in-memory ring buffer from this session's history.
+  await messageAggregator.hydrate();
+
+  // 4. Start listening.
+  httpServer.listen(PORT, () => {
+    const botPath = useRecall ? 'Recall.ai' : `RTMS (${rtmsManager.useMockMode ? 'mock mode' : 'live'})`;
+    const persistence = db ? 'Postgres' : 'in-memory only';
+    const session = sessionManager.getCurrent();
+    console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║         Zoom Chat Aggregator Server Started!               ║
 ╠════════════════════════════════════════════════════════════╣
@@ -273,14 +414,22 @@ httpServer.listen(PORT, () => {
 ║  Webhook endpoint:  http://localhost:${PORT}/webhook/zoom      ║
 ║  Health check:      http://localhost:${PORT}/health            ║
 ║  Bot path:          ${botPath.padEnd(40)}║
+║  Persistence:       ${persistence.padEnd(40)}║
+║  Session:           ${(session?.name || 'none').padEnd(40)}║
 ╠════════════════════════════════════════════════════════════╣
 ║  Development endpoints:                                    ║
 ║  POST /dev/message  - Add test message                     ║
 ║  POST /dev/room     - Add test room                        ║
 ║  GET  /dev/state    - View current state                   ║
 ╚════════════════════════════════════════════════════════════╝
-  `);
-  console.log(`[BotManager] Active path: ${botPath}`);
+    `);
+    console.log(`[BotManager] Active path: ${botPath}`);
+  });
+}
+
+start().catch((err) => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
 });
 
-export { app, io, messageAggregator };
+export { app, io, messageAggregator, sessionManager };

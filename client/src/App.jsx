@@ -7,6 +7,8 @@ import RoomFilter from './components/RoomFilter';
 import SettingsPanel from './components/SettingsPanel';
 import MeetingManager from './components/MeetingManager';
 import ModerationPanel from './components/ModerationPanel';
+import SavedPanel from './components/SavedPanel';
+import { useSaved } from './contexts/SavedContext';
 
 function App() {
   const {
@@ -18,9 +20,10 @@ function App() {
     setSelectedRoom
   } = useSocketContext();
 
-  const [activePanel, setActivePanel] = useState('connect'); // 'connect', 'moderate', 'rooms'
+  const [activePanel, setActivePanel] = useState('connect'); // 'connect', 'moderate', 'rooms', 'saved'
 
   const { settings, setSettingsPanelOpen } = useSettings();
+  const { savedMessages } = useSaved();
 
   return (
     <div
@@ -167,6 +170,20 @@ function App() {
               >
                 Rooms ({rooms.length})
               </button>
+              <button
+                onClick={() => setActivePanel('saved')}
+                className={`flex-1 py-3 px-2 text-xs font-medium transition-colors ${
+                  activePanel === 'saved'
+                    ? 'border-b-2 opacity-100'
+                    : 'opacity-60 hover:opacity-80'
+                }`}
+                style={{
+                  borderColor: activePanel === 'saved' ? 'var(--accent-color)' : 'transparent',
+                  color: activePanel === 'saved' ? 'var(--accent-color)' : 'inherit'
+                }}
+              >
+                Saved ({savedMessages.length})
+              </button>
             </div>
 
             {/* Panel Content */}
@@ -182,6 +199,7 @@ function App() {
                   />
                 </div>
               )}
+              {activePanel === 'saved' && <SavedPanel />}
             </div>
           </aside>
         )}

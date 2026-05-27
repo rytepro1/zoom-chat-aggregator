@@ -1,4 +1,4 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useCallback } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 
 // Create a fallback context for when ModerationProvider isn't available
@@ -11,6 +11,21 @@ function useModerationSafe() {
 
 // Re-export so ModerationContext.jsx can use it
 export { ModerationContext };
+
+// Safe access to SavedContext — ChatMessage is also used inside
+// DisplayView, which has its own React root and doesn't currently wrap
+// a SavedProvider. We probe the context module's exported context
+// directly so we can return null instead of throwing when there's no
+// provider above us.
+// eslint-disable-next-line no-restricted-syntax
+import * as SavedModule from '../contexts/SavedContext';
+function useSavedSafe() {
+  try {
+    return SavedModule.useSaved();
+  } catch {
+    return null;
+  }
+}
 
 // Generate consistent color for each room
 function getRoomColor(roomName) {
@@ -48,6 +63,16 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
   const { settings } = useSettings();
   const moderationFromContext = useModerationSafe();
   const moderation = moderationProp || moderationFromContext;
+  const saved = useSavedSafe();
+  const isSaved = saved ? saved.isSaved(message.id) || message.saved : false;
+
+  const handleToggleSave = useCallback(() => {
+    if (!saved) return;
+    const fn = isSaved ? saved.unsaveMessage : saved.saveMessage;
+    fn(message.id).catch((err) => {
+      console.error('Save toggle failed:', err);
+    });
+  }, [saved, isSaved, message.id]);
 
   // Use custom roomColor if provided, otherwise fall back to generated color
   const roomColor = message.roomColor || getRoomColor(message.room);
@@ -184,6 +209,26 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
       {/* Action buttons - always visible on moderator view */}
       {showActions && moderation && (
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Save (bookmark) button — only renders when SavedProvider is in scope */}
+          {saved && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleToggleSave();
+              }}
+              className={`p-3 rounded-lg transition-colors ${
+                isSaved
+                  ? 'bg-purple-500 text-white'
+                  : 'text-gray-400 hover:text-purple-400 hover:bg-purple-400/20'
+              }`}
+              title={isSaved ? 'Remove from Saved' : 'Save for export'}
+            >
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z" />
+              </svg>
+            </button>
+          )}
+
           {/* Highlight button */}
           <button
             onClick={(e) => {
