@@ -101,12 +101,24 @@ final class WebViewCoordinator: NSObject, WKUIDelegate {
     }
 }
 
-/// WKWebView that lets the operator drag the host window by clicking
-/// anywhere in the web view. AppKit's mouseDown handling distinguishes
-/// click (down+up in place) from drag (down+move), so JS click events
-/// still fire normally — only click-and-drag gestures move the window.
+/// WKWebView for the presenter pop-out:
+///   - Click-and-drag moves the window (mouseDownCanMoveWindow = true).
+///     AppKit distinguishes click from drag, so JS click events still
+///     fire normally.
+///   - Double-click toggles macOS native full-screen on the window the
+///     view is hosted in. Lets the operator drag the window onto the
+///     secondary display, double-click, and immediately get the
+///     animated zoom-to-fill-screen presenter experience.
 final class DraggableWebView: WKWebView {
     override var mouseDownCanMoveWindow: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            window?.toggleFullScreen(nil)
+            return
+        }
+        super.mouseDown(with: event)
+    }
 }
 
 // MARK: - Borderless presenter window
@@ -200,11 +212,17 @@ final class PopOutWindowManager {
         // automatically the way SwiftUI WindowGroups are.
         NSApp.addWindowsItem(window, title: "ZoomChat Display", filename: false)
 
-        // ⎋ Esc closes the presenter window. (Without a title bar,
-        // there's no X button — Esc is the standard exit.)
+        // ⎋ Esc: if in full-screen, exit full-screen first (standard
+        // browser/video-player behavior). Only close the window when
+        // not in full-screen — otherwise the operator pressing Esc to
+        // leave full-screen would accidentally nuke the window.
         let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
             if event.window === window && event.keyCode == 53 /* Escape */ {
-                window?.close()
+                if let w = window, w.styleMask.contains(.fullScreen) {
+                    w.toggleFullScreen(nil)
+                } else {
+                    window?.close()
+                }
                 return nil // consume
             }
             return event
