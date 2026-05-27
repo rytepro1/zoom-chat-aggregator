@@ -13,6 +13,79 @@
  * uses this to decide whether to route /api/meetings/connect through
  * Recall or fall back to the existing RTMS path.
  */
+
+/**
+ * Parse a Recall realtime webhook envelope down to { text, sender,
+ * timestamp }. Targets the documented shape for
+ * `participant_events.chat_message` first, with a small tolerant
+ * fallback so we don't silently drop messages if Recall's schema drifts.
+ */
+function extractChatMessage(payload) {
+  // Documented shape for `participant_events.chat_message` (May 2026):
+  //   { event: "participant_events.chat_message",
+  //     data: {
+  //       data: {
+  //         participant: { id, name, is_host, platform, extra_data, email },
+  //         timestamp:   { absolute, relative },
+  //         data:        { text, to }
+  //       },
+  //       bot: { id, metadata }, recording: {...}, ... } }
+  // https://docs.recall.ai/docs/real-time-event-payloads
+  const root = payload?.data?.data;
+  if (root && typeof root === 'object' && root.data && typeof root.data.text === 'string') {
+    return {
+      text: root.data.text,
+      sender: root.participant?.name ?? null,
+      timestamp: root.timestamp?.absolute ?? null,
+    };
+  }
+
+  // Fallback: tolerate older / alternative envelopes so we don't drop
+  // messages silently if Recall's schema drifts.
+  const inner = payload?.data?.data ?? payload?.data ?? payload;
+  if (!inner || typeof inner !== 'object') return null;
+  const text = inner.text ?? inner.message ?? inner.content ?? null;
+  if (text == null) return null;
+  return {
+    text: String(text),
+    sender:
+      inner.sender_name ??
+      inner.sender?.name ??
+      inner.participant?.name ??
+      inner.from?.name ??
+      null,
+    timestamp:
+      inner.timestamp?.absolute ??
+      (typeof inner.timestamp === 'string' ? inner.timestamp : null) ??
+      inner.created_at ??
+      null,
+  };
+}
+
+// Surface common Recall create-bot failure modes with a one-line hint
+// pointing at the right doc, so the operator doesn't have to grep error
+// text. Heuristic — match on substrings since Recall doesn't publish a
+// stable error-code enum yet.
+function describeRecallError(status, body) {
+  const b = (body || '').toLowerCase();
+  if (status === 403 && b.includes('host not in allowlist')) {
+    return 'Webhook URL host is not on your Recall workspace allowlist (Dashboard → Settings → Webhooks).';
+  }
+  if (b.includes('obf') || b.includes('on behalf of') || b.includes('on_behalf_of')) {
+    return 'Zoom OBF token required. See docs/CHAT-CAPTURE-ARCHITECTURE.md and https://docs.recall.ai/docs/zoom-obf — needs a Zoom-authorized chaperone in the meeting and an OBF callback endpoint on our side.';
+  }
+  if (status === 401) {
+    return 'RECALL_API_KEY rejected — check the key and region (RECALL_API_BASE).';
+  }
+  if (status === 402 || b.includes('billing')) {
+    return 'Billing/plan issue on the Recall workspace.';
+  }
+  if (b.includes('meeting_url') && b.includes('invalid')) {
+    return 'Recall could not parse the meeting URL — check the Meeting ID + passcode.';
+  }
+  return null;
+}
+
 export class RecallBotManager {
   constructor({ messageAggregator, apiKey, apiBase, publicWebhookUrl }) {
     this.messageAggregator = messageAggregator;
@@ -85,8 +158,9 @@ export class RecallBotManager {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
+      const hint = describeRecallError(response.status, errorText);
       throw new Error(
-        `Recall API returned ${response.status}: ${errorText.slice(0, 500) || response.statusText}`
+        `Recall API returned ${response.status}: ${errorText.slice(0, 500) || response.statusText}${hint ? ` — ${hint}` : ''}`
       );
     }
 
@@ -163,13 +237,21 @@ export class RecallBotManager {
   }
 
   /**
-   * Called by the /webhook/recall/chat route. Recall's realtime webhook
-   * envelope shape varies slightly across event types and SDK versions,
-   * so we probe a few common paths rather than asserting a single shape.
-   * Any payload we can't recognize is logged and dropped (the route
-   * still returns 200 so Recall doesn't retry).
+   * Called by the /webhook/recall/chat route. Delegates payload parsing
+   * to extractChatMessage() (which targets Recall's documented schema
+   * first, with a tolerant fallback). Bot-id lookup is handled here so
+   * we can correlate the message back to a room/meeting we know about.
    */
   handleChatEvent(payload) {
+    const chat = extractChatMessage(payload);
+    if (!chat) {
+      console.warn(
+        '[Recall] handleChatEvent: no chat body found in payload:',
+        JSON.stringify(payload).slice(0, 400)
+      );
+      return;
+    }
+
     // Bot id can live at several levels of the envelope.
     const botId =
       payload?.bot?.id ||
@@ -182,55 +264,20 @@ export class RecallBotManager {
     const meetingId = botId ? this.meetingsByBot.get(botId) || null : null;
     const botInfo = meetingId ? this.botsByMeeting.get(meetingId) : null;
 
-    // Locate the chat message body — try common envelope shapes in order.
-    const candidates = [
-      payload?.data?.data,
-      payload?.data?.message,
-      payload?.data,
-      payload?.message,
-      payload,
-    ].filter(Boolean);
-
-    let chat = null;
-    for (const c of candidates) {
-      if (c && (c.text || c.message_text || c.content || c.body)) {
-        chat = c;
-        break;
-      }
+    if (botId && !botInfo) {
+      // Probably a stale webhook for a bot we no longer track (process
+      // restart, manual cleanup). Surface the mismatch but still forward
+      // the message — better an "Unknown Room" entry than a silent drop.
+      console.warn(`[Recall] unknown bot ${botId} — forwarding message without room context`);
     }
-
-    if (!chat) {
-      console.warn(
-        '[Recall] handleChatEvent: no chat body found in payload:',
-        JSON.stringify(payload).slice(0, 400)
-      );
-      return;
-    }
-
-    const content = chat.text || chat.message_text || chat.content || chat.body || '';
-    const sender =
-      chat.participant?.name ||
-      chat.sender?.name ||
-      chat.from?.name ||
-      chat.participant_name ||
-      chat.sender_name ||
-      chat.user?.name ||
-      payload?.participant?.name ||
-      'Unknown';
-    const timestamp =
-      chat.timestamp ||
-      chat.created_at ||
-      chat.sent_at ||
-      payload?.timestamp ||
-      new Date().toISOString();
 
     this.messageAggregator.addMessage({
-      sender,
-      content,
+      sender: chat.sender || 'Unknown',
+      content: chat.text,
       room: botInfo?.roomName || 'Unknown Room',
       roomColor: botInfo?.roomColor || '#ef4444',
       meetingId: meetingId || botInfo?.meetingId || null,
-      timestamp,
+      timestamp: chat.timestamp || new Date().toISOString(),
       type: 'chat',
     });
   }

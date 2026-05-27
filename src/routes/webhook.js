@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { RTMSManager } from '../rtms/RTMSManager.js';
+import { verifyRecallWebhook } from '../recall/verifyRecallWebhook.js';
 
 const router = express.Router();
 
@@ -156,25 +157,35 @@ function handleRTMSStopped(payload, rtmsManager, messageAggregator) {
 }
 
 /**
- * Recall.ai realtime webhook — receives chat_message events for any bot
- * we've dispatched via RecallBotManager. We always return 200 so Recall
- * doesn't retry on internal parsing bugs; the manager logs anything it
- * couldn't make sense of.
- *
- * TODO: validate Recall's webhook signature once we know which header
- * they sign with and have a shared secret in the env.
+ * Recall.ai realtime webhook — receives chat_message events for bots
+ * dispatched via RecallBotManager. When RECALL_WEBHOOK_SECRET is set we
+ * verify the Svix-style signature over the raw body; otherwise we accept
+ * with a warning (dev convenience). We always return 200 on accepted
+ * requests so Recall doesn't retry on our parsing bugs.
  */
 router.post('/recall/chat', (req, res) => {
-  try {
-    const recallBotManager = req.app.get('recallBotManager');
-    if (recallBotManager) {
-      recallBotManager.handleChatEvent(req.body);
-    } else {
-      console.warn('[Recall webhook] no recallBotManager registered');
-    }
-  } catch (error) {
-    console.error('[Recall webhook] error handling chat event:', error);
+  const recallBotManager = req.app.get('recallBotManager');
+  if (!recallBotManager) {
+    return res.status(503).json({ error: 'Recall manager not initialized' });
   }
+
+  const secret = process.env.RECALL_WEBHOOK_SECRET;
+  if (secret) {
+    const result = verifyRecallWebhook(req.headers, req.rawBody, secret);
+    if (!result.ok) {
+      console.warn(`[Recall webhook] rejected: ${result.reason}`);
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+  } else {
+    console.warn('[Recall webhook] RECALL_WEBHOOK_SECRET not set — accepting without verification (set it in Railway env vars)');
+  }
+
+  try {
+    recallBotManager.handleChatEvent(req.body);
+  } catch (err) {
+    console.error('[Recall webhook] handler error:', err);
+  }
+  // Always 200 so Recall doesn't retry on our parsing bugs.
   res.status(200).json({ received: true });
 });
 

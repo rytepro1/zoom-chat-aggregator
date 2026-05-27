@@ -54,7 +54,11 @@ app.set('io', io);
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+// Capture the raw request body alongside parsed JSON so webhook handlers
+// can verify HMAC signatures over the exact bytes the sender signed.
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging
@@ -69,6 +73,26 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     rooms: messageAggregator.getStats()
+  });
+});
+
+// Operational status — confirms which capture path is live and how it's
+// configured. Useful for verifying a Railway redeploy picked up env vars
+// without having to dig through logs.
+app.get('/api/status', (req, res) => {
+  res.json({
+    botPath: useRecall ? 'recall' : 'rtms-mock',
+    recall: {
+      configured: recallBotManager.isConfigured(),
+      apiBase: recallBotManager.apiBase,
+      publicWebhookUrl: recallBotManager.publicWebhookUrl,
+      webhookSignatureEnforced: Boolean(process.env.RECALL_WEBHOOK_SECRET),
+      activeBots: recallBotManager.getActiveConnections().length,
+    },
+    rtms: {
+      mockMode: rtmsManager.useMockMode,
+      activeConnections: rtmsManager.getActiveConnections().length,
+    },
   });
 });
 
