@@ -9,6 +9,7 @@ import webhookRoutes from '../routes/webhook.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { MessageAggregator } from '../services/MessageAggregator.js';
 import { RTMSManager } from '../rtms/RTMSManager.js';
+import { RecallBotManager } from '../recall/RecallBotManager.js';
 
 // Load environment variables
 dotenv.config();
@@ -32,12 +33,23 @@ const io = new Server(httpServer, {
 // Initialize message aggregator
 const messageAggregator = new MessageAggregator(io);
 
-// Initialize RTMS manager
+// Initialize RTMS manager (legacy / mock fallback)
 const rtmsManager = new RTMSManager(messageAggregator);
 
-// Make aggregator and RTMS manager available to routes
+// Initialize Recall.ai bot manager. Active only when both RECALL_API_KEY
+// and PUBLIC_WEBHOOK_URL are configured; otherwise we fall back to RTMS.
+const recallBotManager = new RecallBotManager({
+  messageAggregator,
+  apiKey: process.env.RECALL_API_KEY,
+  apiBase: process.env.RECALL_API_BASE,
+  publicWebhookUrl: process.env.PUBLIC_WEBHOOK_URL,
+});
+const useRecall = recallBotManager.isConfigured();
+
+// Make managers available to routes
 app.set('messageAggregator', messageAggregator);
 app.set('rtmsManager', rtmsManager);
+app.set('recallBotManager', recallBotManager);
 app.set('io', io);
 
 // Middleware
@@ -69,7 +81,8 @@ app.use('/webhook', webhookRoutes);
 
 // Get list of connected meetings
 app.get('/api/meetings', (req, res) => {
-  const connections = rtmsManager.getActiveConnections();
+  const manager = useRecall ? recallBotManager : rtmsManager;
+  const connections = manager.getActiveConnections();
   res.json({
     meetings: connections.map(conn => ({
       id: conn.meetingId,
@@ -96,8 +109,12 @@ app.post('/api/meetings/connect', async (req, res) => {
   const finalRoomColor = roomColor || '#ef4444';
 
   try {
-    // Connect via RTMS manager (will use mock mode if RTMS not available)
-    await rtmsManager.connect(cleanMeetingId, null, finalRoomName, finalRoomColor);
+    // Route through Recall when configured; otherwise use the existing RTMS path.
+    if (useRecall) {
+      await recallBotManager.connect(cleanMeetingId, passcode, finalRoomName, finalRoomColor);
+    } else {
+      await rtmsManager.connect(cleanMeetingId, null, finalRoomName, finalRoomColor);
+    }
 
     // Add room to message aggregator
     messageAggregator.addRoom({
@@ -107,6 +124,8 @@ app.post('/api/meetings/connect', async (req, res) => {
       participantCount: 0
     });
 
+    const isMock = useRecall ? false : rtmsManager.useMockMode;
+
     // Notify clients
     io.emit('meetingConnected', {
       id: cleanMeetingId,
@@ -114,16 +133,23 @@ app.post('/api/meetings/connect', async (req, res) => {
       roomName: finalRoomName,
       roomColor: finalRoomColor,
       status: 'connected',
-      isMock: rtmsManager.useMockMode
+      isMock
     });
+
+    let message;
+    if (useRecall) {
+      message = 'Bot dispatched to meeting via Recall.ai';
+    } else if (rtmsManager.useMockMode) {
+      message = 'Connected in mock mode (RTMS not available)';
+    } else {
+      message = 'Connected to meeting stream';
+    }
 
     res.json({
       success: true,
       id: cleanMeetingId,
-      message: rtmsManager.useMockMode
-        ? 'Connected in mock mode (RTMS not available)'
-        : 'Connected to meeting stream',
-      isMock: rtmsManager.useMockMode
+      message,
+      isMock
     });
   } catch (error) {
     console.error('Failed to connect to meeting:', error);
@@ -132,11 +158,15 @@ app.post('/api/meetings/connect', async (req, res) => {
 });
 
 // Disconnect from a meeting
-app.post('/api/meetings/:id/disconnect', (req, res) => {
+app.post('/api/meetings/:id/disconnect', async (req, res) => {
   const { id } = req.params;
 
   try {
-    rtmsManager.disconnect(id);
+    if (useRecall) {
+      await recallBotManager.disconnect(id);
+    } else {
+      rtmsManager.disconnect(id);
+    }
 
     // Remove room from message aggregator
     messageAggregator.removeRoom(id);
@@ -210,6 +240,7 @@ if (process.env.NODE_ENV === 'production') {
 // Start server
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
+  const botPath = useRecall ? 'Recall.ai' : `RTMS (${rtmsManager.useMockMode ? 'mock mode' : 'live'})`;
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║         Zoom Chat Aggregator Server Started!               ║
@@ -217,6 +248,7 @@ httpServer.listen(PORT, () => {
 ║  Server running on: http://localhost:${PORT}                   ║
 ║  Webhook endpoint:  http://localhost:${PORT}/webhook/zoom      ║
 ║  Health check:      http://localhost:${PORT}/health            ║
+║  Bot path:          ${botPath.padEnd(40)}║
 ╠════════════════════════════════════════════════════════════╣
 ║  Development endpoints:                                    ║
 ║  POST /dev/message  - Add test message                     ║
@@ -224,6 +256,7 @@ httpServer.listen(PORT, () => {
 ║  GET  /dev/state    - View current state                   ║
 ╚════════════════════════════════════════════════════════════╝
   `);
+  console.log(`[BotManager] Active path: ${botPath}`);
 });
 
 export { app, io, messageAggregator };

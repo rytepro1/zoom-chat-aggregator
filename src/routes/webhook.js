@@ -155,4 +155,27 @@ function handleRTMSStopped(payload, rtmsManager, messageAggregator) {
   console.log(`Disconnected from meeting: ${meetingId}`);
 }
 
+/**
+ * Recall.ai realtime webhook — receives chat_message events for any bot
+ * we've dispatched via RecallBotManager. We always return 200 so Recall
+ * doesn't retry on internal parsing bugs; the manager logs anything it
+ * couldn't make sense of.
+ *
+ * TODO: validate Recall's webhook signature once we know which header
+ * they sign with and have a shared secret in the env.
+ */
+router.post('/recall/chat', (req, res) => {
+  try {
+    const recallBotManager = req.app.get('recallBotManager');
+    if (recallBotManager) {
+      recallBotManager.handleChatEvent(req.body);
+    } else {
+      console.warn('[Recall webhook] no recallBotManager registered');
+    }
+  } catch (error) {
+    console.error('[Recall webhook] error handling chat event:', error);
+  }
+  res.status(200).json({ received: true });
+});
+
 export default router;
