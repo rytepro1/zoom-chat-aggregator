@@ -142,6 +142,11 @@ struct WebView: NSViewRepresentable {
         // PopOutWindowManager — borderless, auto-placed on the secondary
         // screen.
         webView.uiDelegate = context.coordinator
+        // navigationDelegate is needed for WKWebView to recognize
+        // `<a download>` clicks (PNG export from SavedPanel) and hand
+        // them off to a WKDownload — otherwise WKWebView silently
+        // ignores the click and the user sees nothing happen.
+        webView.navigationDelegate = context.coordinator
         webView.load(URLRequest(url: url))
         webView.setValue(false, forKey: "drawsBackground")
 
@@ -159,7 +164,7 @@ struct WebView: NSViewRepresentable {
 
 // MARK: - window.open handling
 
-final class WebViewCoordinator: NSObject, WKUIDelegate {
+final class WebViewCoordinator: NSObject, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
     /// Held weakly to avoid a retain cycle; SwiftUI owns the actual
     /// WKWebView lifetime.
     weak var webView: WKWebView?
@@ -211,6 +216,7 @@ final class WebViewCoordinator: NSObject, WKUIDelegate {
         // mouseDown as a potential window-drag.
         let newWebView = DraggableWebView(frame: .zero, configuration: configuration)
         newWebView.uiDelegate = self // chained window.open from this window too
+        newWebView.navigationDelegate = self // downloads from popped-out window too
         newWebView.setValue(false, forKey: "drawsBackground")
 
         PopOutWindowManager.shared.hostPresenter(webView: newWebView)
@@ -218,6 +224,88 @@ final class WebViewCoordinator: NSObject, WKUIDelegate {
         // Returning the new web view tells WebKit to load
         // navigationAction.request into it automatically.
         return newWebView
+    }
+
+    // MARK: - Downloads (PNG quote-card export from the React UI)
+
+    /// Recognize `<a download>` clicks as downloads instead of
+    /// navigations. WKWebView surfaces this via
+    /// `navigationAction.shouldPerformDownload`, which is true when
+    /// the source anchor has a `download` attribute. Without this
+    /// hook the click is silently swallowed and the user sees nothing.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
+
+    /// Also catch the rarer case where a navigation response itself
+    /// declares a downloadable Content-Disposition.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        if let httpResponse = navigationResponse.response as? HTTPURLResponse,
+           let disposition = httpResponse.allHeaderFields["Content-Disposition"] as? String,
+           disposition.lowercased().contains("attachment") {
+            decisionHandler(.download)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
+
+    /// Once WKWebView decides a navigation is a download, it creates a
+    /// WKDownload and asks us to claim it. We assign ourselves as the
+    /// delegate so we can pick the destination and react to
+    /// completion/failure.
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    /// Auto-save to ~/Downloads with a unique filename if one already
+    /// exists. No save panel — operators clicking "PNG" expect a quick
+    /// drop into Downloads, not another modal.
+    func download(
+        _ download: WKDownload,
+        decideDestinationUsing response: URLResponse,
+        suggestedFilename: String,
+        completionHandler: @escaping (URL?) -> Void
+    ) {
+        let fm = FileManager.default
+        let downloadsDir = (try? fm.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: false))
+            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+
+        var candidate = downloadsDir.appendingPathComponent(suggestedFilename)
+        if fm.fileExists(atPath: candidate.path) {
+            // Append a timestamp suffix so a second export of the same
+            // message doesn't clobber the first.
+            let stem = candidate.deletingPathExtension().lastPathComponent
+            let ext = candidate.pathExtension
+            let ts = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let suffixed = "\(stem)-\(ts).\(ext.isEmpty ? "png" : ext)"
+            candidate = downloadsDir.appendingPathComponent(suffixed)
+        }
+        completionHandler(candidate)
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        NSLog("[ZoomChat] download finished")
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        NSLog("[ZoomChat] download failed: \(error.localizedDescription)")
     }
 }
 

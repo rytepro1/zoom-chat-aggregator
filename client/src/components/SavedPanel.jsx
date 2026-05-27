@@ -31,6 +31,7 @@ function SavedPanel() {
   };
 
   const exportAsPng = async (m) => {
+    console.log('[PNG export] starting for message', m.id);
     setPngBusyId(m.id);
     setExportingMessage(m);
     // Two RAFs to make sure the card has rendered with its full styles
@@ -39,18 +40,42 @@ function SavedPanel() {
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     try {
       if (!cardRef.current) throw new Error('card ref missing');
+      console.log('[PNG export] rendering card to PNG...');
       const dataUrl = await toPng(cardRef.current, {
         pixelRatio: 2,           // crisp on retina; final PNG is 2160x2160
         cacheBust: true,
         backgroundColor: '#0f0f23',
       });
+      console.log('[PNG export] got dataUrl, size ~', Math.round(dataUrl.length / 1024), 'KB');
+
+      // WKWebView (Mac app) silently ignores `<a download>` clicks on
+      // raw data: URLs. Convert to a Blob URL — which WKWebView's
+      // navigation delegate can recognize as a download intent and
+      // hand off to WKDownloadDelegate (handled Swift-side in
+      // launcher-v2/Sources/main.swift). Works in regular browsers too.
+      const blob = await (await fetch(dataUrl)).blob();
+      const blobUrl = URL.createObjectURL(blob);
+
       const safeSender = (m.sender || 'quote').replace(/[^a-zA-Z0-9]+/g, '-').slice(0, 32);
+      const fileName = `zoomchat-${safeSender}-${m.id.slice(0, 8)}.png`;
+
+      // Anchor must be in the DOM for the synthetic click to navigate
+      // correctly in some webviews (incl. WKWebView).
       const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = `zoomchat-${safeSender}-${m.id.slice(0, 8)}.png`;
+      a.href = blobUrl;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
+
+      // Give the browser a beat to start the download before we revoke
+      // the Blob URL.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+
+      console.log('[PNG export] download triggered:', fileName);
     } catch (err) {
-      console.error('PNG export failed:', err);
+      console.error('[PNG export] failed:', err);
       alert('PNG export failed: ' + (err.message || 'unknown error'));
     } finally {
       setExportingMessage(null);
