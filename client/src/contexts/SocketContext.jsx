@@ -22,6 +22,17 @@ export function SocketProvider({ children }) {
     activeRooms: 0
   });
   const [selectedRoom, setSelectedRoom] = useState(null);
+  // Phase 3 — trial enforcement state, kept fresh via socket events.
+  // Initially null; populated by `trialUpdate` (every 30s) once the
+  // TrialEnforcer ticks. Components default to /me's snapshot if null.
+  const [trialState, setTrialState] = useState({
+    remainingMinutes: null,
+    usedMinutes: null,
+    quotaMinutes: null,
+    warningShown: false,
+    exhausted: false,
+    upgradeUrl: null,
+  });
 
   useEffect(() => {
     const newSocket = io(SOCKET_URL, {
@@ -90,6 +101,19 @@ export function SocketProvider({ children }) {
       setStats(data.stats);
     });
 
+    // Phase 3 — trial enforcement events. TrialEnforcer emits these to
+    // the org's room; we keep local state so the UI banner/modal can
+    // react without an extra round-trip.
+    newSocket.on('trialUpdate', ({ remainingMinutes, usedMinutes, quotaMinutes }) => {
+      setTrialState(prev => ({ ...prev, remainingMinutes, usedMinutes, quotaMinutes }));
+    });
+    newSocket.on('trialWarning', () => {
+      setTrialState(prev => ({ ...prev, warningShown: true }));
+    });
+    newSocket.on('trialExhausted', ({ upgradeUrl }) => {
+      setTrialState(prev => ({ ...prev, exhausted: true, upgradeUrl }));
+    });
+
     setSocket(newSocket);
 
     return () => {
@@ -102,6 +126,8 @@ export function SocketProvider({ children }) {
     ? messages.filter(m => m.room === selectedRoom || m.meetingId === selectedRoom)
     : messages;
 
+  const dismissTrialWarning = () => setTrialState(prev => ({ ...prev, warningShown: false }));
+
   const value = {
     socket,
     connected,
@@ -110,7 +136,9 @@ export function SocketProvider({ children }) {
     rooms,
     stats,
     selectedRoom,
-    setSelectedRoom
+    setSelectedRoom,
+    trialState,
+    dismissTrialWarning,
   };
 
   return (

@@ -12,6 +12,8 @@ import SavedPanel from './components/SavedPanel';
 import SessionHeader from './components/SessionHeader';
 import RostersPanel from './components/RostersPanel';
 import AccountMenu from './components/AccountMenu';
+import TrialBanner from './components/TrialBanner';
+import TrialExhaustedModal from './components/TrialExhaustedModal';
 import { useSaved } from './contexts/SavedContext';
 
 function App() {
@@ -39,6 +41,9 @@ function App() {
         fontSize: 'var(--base-font-size)',
       }}
     >
+      <TrialBanner />
+      <TrialExhaustedModal />
+
       {/* Header */}
       {settings.headerVisible && (
         <header

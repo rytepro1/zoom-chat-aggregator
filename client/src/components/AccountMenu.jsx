@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSocketContext } from '../contexts/SocketContext';
 
 /**
  * AccountMenu — small dropdown in the header showing the signed-in
@@ -11,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
  */
 export default function AccountMenu() {
   const { user, org, logout } = useAuth();
+  const { trialState } = useSocketContext();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -28,8 +30,9 @@ export default function AccountMenu() {
   const tierLabel = (() => {
     if (org.planTier === 'admin') return 'Admin';
     if (org.planTier === 'trial') {
-      const mins = org.trialMinutesRemaining ?? 0;
-      return `Trial · ${mins}m left`;
+      // Live socket value when present, else the /me snapshot.
+      const mins = trialState?.remainingMinutes ?? org.trialMinutesRemaining ?? 30;
+      return `Trial · ${Math.max(0, Math.ceil(mins))}m left`;
     }
     return org.planTier?.charAt(0).toUpperCase() + org.planTier?.slice(1);
   })();

@@ -11,6 +11,7 @@ import authRouter from '../routes/auth.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { RosterManager } from '../services/RosterManager.js';
 import { OrgState } from '../services/OrgState.js';
+import { TrialEnforcer } from '../services/TrialEnforcer.js';
 import { RTMSManager } from '../rtms/RTMSManager.js';
 import { RecallBotManager } from '../recall/RecallBotManager.js';
 import { initDatabase } from '../db/index.js';
@@ -48,11 +49,15 @@ const recallBotManager = new RecallBotManager({
 });
 const useRecall = recallBotManager.isConfigured();
 const orgState = new OrgState({ io });
+// TrialEnforcer is constructed without db here; start() is called from
+// start() once db is initialized.
+const trialEnforcer = new TrialEnforcer({ db: null, io, recallBotManager, orgState });
 
 app.set('rosterManager', rosterManager);
 app.set('rtmsManager', rtmsManager);
 app.set('recallBotManager', recallBotManager);
 app.set('orgState', orgState);
+app.set('trialEnforcer', trialEnforcer);
 app.set('io', io);
 
 // ---- Middleware ----
@@ -146,6 +151,15 @@ app.post('/api/meetings/connect', async (req, res) => {
   if (useRecall && (!botName || !String(botName).trim())) {
     return res.status(400).json({
       error: 'Bot Display Name is required — this is how the bot will appear to participants.',
+    });
+  }
+
+  // Phase 3 gate: concurrent-bot cap + trial-minutes check.
+  const check = await trialEnforcer.checkCanDispatch(req.org);
+  if (!check.allowed) {
+    return res.status(check.code || 402).json({
+      error: check.reason,
+      upgradeUrl: check.upgradeUrl,
     });
   }
 
@@ -474,6 +488,24 @@ app.post('/api/rosters/:id/deploy', async (req, res) => {
       return res.status(400).json({ error: 'Roster has no meetings to deploy' });
     }
 
+    // Phase 3 gate: trial users can't deploy a roster larger than their
+    // concurrent cap. Pre-flight check so we don't dispatch some and reject
+    // the rest mid-deploy.
+    const check = await trialEnforcer.checkCanDispatch(req.org);
+    if (!check.allowed) {
+      return res.status(check.code || 402).json({
+        error: check.reason,
+        upgradeUrl: check.upgradeUrl,
+      });
+    }
+    const activeBots = recallBotManager.getActiveConnections(req.org.id).length;
+    if (activeBots + roster.entries.length > req.org.concurrentBotLimit) {
+      return res.status(402).json({
+        error: `This roster has ${roster.entries.length} meetings but your plan allows only ${req.org.concurrentBotLimit} concurrent bot(s) (currently ${activeBots} active). Upgrade to deploy larger rosters.`,
+        upgradeUrl: trialEnforcer._upgradeUrl(),
+      });
+    }
+
     recallBotManager.orgState = orgState;
     recallBotManager.db = app.get('db');
 
@@ -541,10 +573,14 @@ async function start() {
   rosterManager.db = db;
   recallBotManager.db = db;
   recallBotManager.orgState = orgState;
+  trialEnforcer.db = db;
 
   // Register Socket.io handlers now that `db` is available (the auth
   // middleware needs it on every handshake).
   setupSocketHandlers(io, { db, orgState });
+
+  // Start the trial enforcer tick loop (every 30s). No-op when db is null.
+  trialEnforcer.start();
 
   httpServer.listen(PORT, () => {
     const botPath = useRecall ? 'Recall.ai' : `RTMS (${rtmsManager.useMockMode ? 'mock' : 'live'})`;
