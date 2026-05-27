@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { MeetingsProvider } from './MeetingsContext';
 import { ModerationProvider } from './ModerationContext';
 import { SavedProvider } from './SavedContext';
+import { SessionProvider } from './SessionContext';
 
 const SocketContext = createContext(null);
 
@@ -100,13 +101,15 @@ export function SocketProvider({ children }) {
 
   return (
     <SocketContext.Provider value={value}>
-      <MeetingsProvider socket={socket}>
-        <ModerationProvider socket={socket}>
-          <SavedProvider socket={socket}>
-            {children}
-          </SavedProvider>
-        </ModerationProvider>
-      </MeetingsProvider>
+      <SessionProvider socket={socket}>
+        <MeetingsProvider socket={socket}>
+          <ModerationProvider socket={socket}>
+            <SavedProvider socket={socket}>
+              {children}
+            </SavedProvider>
+          </ModerationProvider>
+        </MeetingsProvider>
+      </SessionProvider>
     </SocketContext.Provider>
   );
 }

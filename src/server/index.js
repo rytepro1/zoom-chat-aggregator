@@ -224,6 +224,21 @@ app.get('/api/sessions/current', (req, res) => {
   res.json({ session: sessionManager.getCurrent() });
 });
 
+// Rename the current session. Body: { name }.
+app.patch('/api/sessions/current', async (req, res) => {
+  const name = req.body?.name;
+  if (typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  try {
+    const session = await sessionManager.rename(name);
+    res.json({ session });
+  } catch (err) {
+    console.error('PATCH /api/sessions/current failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Full list of sessions, most recent first, with message counts. Lets a
 // future UI browse past events.
 app.get('/api/sessions', async (req, res) => {

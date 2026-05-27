@@ -70,6 +70,27 @@ export class SessionManager {
   }
 
   /**
+   * Rename the current session (no other state change). Used when the
+   * operator wants to label an in-flight session with a meaningful name
+   * (e.g. "Acme Q3 Kickoff" instead of the date-stamped default).
+   */
+  async rename(name) {
+    if (!this.current) return null;
+    const trimmed = String(name || '').trim();
+    if (!trimmed) throw new Error('Session name cannot be empty');
+    if (this.db) {
+      await this.db.query(
+        `UPDATE sessions SET name = $2 WHERE id = $1`,
+        [this.current.id, trimmed]
+      );
+    }
+    this.current = { ...this.current, name: trimmed };
+    console.log(`[Session] renamed to: ${trimmed} (${this.current.id})`);
+    this.io?.emit('sessionRenamed', { id: this.current.id, name: trimmed });
+    return this.current;
+  }
+
+  /**
    * Return a list of all sessions (most recent first) along with their
    * message counts. Used by the React UI's session browser.
    */

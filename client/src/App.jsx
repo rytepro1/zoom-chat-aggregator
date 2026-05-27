@@ -8,6 +8,7 @@ import SettingsPanel from './components/SettingsPanel';
 import MeetingManager from './components/MeetingManager';
 import ModerationPanel from './components/ModerationPanel';
 import SavedPanel from './components/SavedPanel';
+import SessionHeader from './components/SessionHeader';
 import { useSaved } from './contexts/SavedContext';
 
 function App() {
@@ -66,6 +67,7 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-4">
+              <SessionHeader />
               <StatusBar connected={connected} stats={stats} />
               <button
                 onClick={() => {
