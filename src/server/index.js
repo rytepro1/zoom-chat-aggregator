@@ -2,10 +2,12 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import webhookRoutes from '../routes/webhook.js';
+import authRouter from '../routes/auth.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { MessageAggregator } from '../services/MessageAggregator.js';
 import { SessionManager } from '../services/SessionManager.js';
@@ -13,6 +15,7 @@ import { RosterManager } from '../services/RosterManager.js';
 import { RTMSManager } from '../rtms/RTMSManager.js';
 import { RecallBotManager } from '../recall/RecallBotManager.js';
 import { initDatabase } from '../db/index.js';
+import { attachUser } from '../auth/middleware.js';
 
 // Load environment variables
 dotenv.config();
@@ -68,7 +71,16 @@ app.set('recallBotManager', recallBotManager);
 app.set('io', io);
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  // Auth cookies need credentials; same-origin in production. In dev, the
+  // Vite proxy keeps everything same-origin so this just permissively
+  // mirrors the request origin.
+  origin: process.env.NODE_ENV === 'production'
+    ? true
+    : ['http://localhost:5173', 'http://localhost:3000'],
+  credentials: true,
+}));
+app.use(cookieParser());
 // Capture the raw request body alongside parsed JSON so webhook handlers
 // can verify HMAC signatures over the exact bytes the sender signed.
 app.use(express.json({
@@ -80,6 +92,15 @@ app.use(express.urlencoded({ extended: true }));
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
+});
+
+// Attach req.user / req.org if a valid session cookie is present.
+// Phase 1: soft auth only — existing routes still work unauthenticated.
+// Phase 2 will add requireAuth on the gated routes.
+app.use((req, res, next) => {
+  const db = app.get('db');
+  if (!db) return next();
+  return attachUser(db)(req, res, next);
 });
 
 // Health check endpoint
@@ -111,8 +132,11 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// Webhook routes
+// Webhook routes (HMAC-verified, never authenticated by user session)
 app.use('/webhook', webhookRoutes);
+
+// Auth routes (signup, login, logout, /me, verify-email, password-reset)
+app.use('/api/auth', authRouter());
 
 // ============================================
 // MEETING CONNECTION API ENDPOINTS
@@ -652,6 +676,8 @@ async function start() {
   recallBotManager.db = db;
   recallBotManager.sessionManager = sessionManager;
   rosterManager.db = db;
+  // Expose db to route handlers (auth router needs it).
+  app.set('db', db);
 
   // 2. Reopen the most recent un-ended session, or create a new one.
   await sessionManager.init();

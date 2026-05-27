@@ -119,6 +119,105 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'r
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'ryteproductions';
 CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_messages_tenant ON messages(tenant_id);
+
+-- ============================================
+-- MONETIZATION SCHEMA (Phase 1)
+-- See docs/MONETIZATION-PLAN.md for the design rationale.
+-- ============================================
+
+-- Organizations are the unit of billing. Every user belongs to exactly
+-- one org. plan_tier='admin' is a permanent RYTE-only tier that bypasses
+-- trial limits; 'trial' is the default for new signups (30 min, 1 bot);
+-- 'solo' is the paid $49/mo tier.
+CREATE TABLE IF NOT EXISTS organizations (
+  id                       TEXT PRIMARY KEY,
+  name                     TEXT NOT NULL,
+  plan_tier                TEXT NOT NULL DEFAULT 'trial',
+  concurrent_bot_limit     INTEGER NOT NULL DEFAULT 1,
+  trial_minutes_remaining  INTEGER,
+  stripe_customer_id       TEXT UNIQUE,
+  stripe_subscription_id   TEXT UNIQUE,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id              TEXT PRIMARY KEY,
+  org_id          TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  email           TEXT UNIQUE NOT NULL,
+  password_hash   TEXT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'operator',
+  email_verified  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_login_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
+
+-- Server-side sessions. The session id (random 256-bit hex) is stored
+-- in an HTTP-only cookie; row is looked up on every authenticated
+-- request. Cheaper than JWT for revocation (just DELETE the row).
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user    ON auth_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
+
+-- One-shot tokens for email verification and password reset. Tokens are
+-- single-use (used_at gets stamped) and time-limited (expires_at).
+CREATE TABLE IF NOT EXISTS email_tokens (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type        TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON email_tokens(user_id);
+
+-- Team invitations. Admin generates a link, recipient clicks → signup.
+CREATE TABLE IF NOT EXISTS invitations (
+  id           TEXT PRIMARY KEY,
+  org_id       TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  email        TEXT NOT NULL,
+  role         TEXT NOT NULL DEFAULT 'operator',
+  invited_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+  token        TEXT UNIQUE NOT NULL,
+  expires_at   TIMESTAMPTZ NOT NULL,
+  accepted_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_invitations_org   ON invitations(org_id);
+CREATE INDEX IF NOT EXISTS idx_invitations_email ON invitations(email);
+
+-- Add org_id to existing tenant-scoped tables. Lives alongside the old
+-- tenant_id column for now — Phase 2 backfills, Phase 7+ drops tenant_id.
+ALTER TABLE sessions      ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE messages      ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE bot_usage     ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE sent_messages ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+ALTER TABLE rosters       ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_sessions_org      ON sessions(org_id);
+CREATE INDEX IF NOT EXISTS idx_messages_org      ON messages(org_id);
+CREATE INDEX IF NOT EXISTS idx_bot_usage_org     ON bot_usage(org_id);
+CREATE INDEX IF NOT EXISTS idx_sent_messages_org ON sent_messages(org_id);
+CREATE INDEX IF NOT EXISTS idx_rosters_org       ON rosters(org_id);
+`;
+
+// One-shot data migration: create the RYTE org and backfill org_id on
+// all existing rows tagged with tenant_id='ryteproductions'. Idempotent
+// — re-running is a no-op once everything has org_id set.
+const MIGRATION_SQL = `
+INSERT INTO organizations (id, name, plan_tier, concurrent_bot_limit, trial_minutes_remaining)
+VALUES ('ryte-org', 'RYTE Productions', 'admin', 999, NULL)
+ON CONFLICT (id) DO NOTHING;
+
+UPDATE sessions      SET org_id = 'ryte-org' WHERE org_id IS NULL AND tenant_id = 'ryteproductions';
+UPDATE messages      SET org_id = 'ryte-org' WHERE org_id IS NULL AND tenant_id = 'ryteproductions';
+UPDATE bot_usage     SET org_id = 'ryte-org' WHERE org_id IS NULL AND tenant_id = 'ryteproductions';
+UPDATE sent_messages SET org_id = 'ryte-org' WHERE org_id IS NULL AND tenant_id = 'ryteproductions';
+UPDATE rosters       SET org_id = 'ryte-org' WHERE org_id IS NULL AND tenant_id = 'ryteproductions';
 `;
 
 /**
@@ -154,7 +253,8 @@ export async function initDatabase({ databaseUrl, retries = 5, retryDelayMs = 20
     try {
       await pool.query('SELECT 1');
       await pool.query(SCHEMA_SQL);
-      console.log('[DB] connected and schema applied');
+      await pool.query(MIGRATION_SQL);
+      console.log('[DB] connected, schema applied, migrations run');
       return {
         query: (text, params) => pool.query(text, params),
         end: () => pool.end(),
