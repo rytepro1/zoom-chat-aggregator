@@ -120,25 +120,63 @@ final class PopOutWindowManager {
     private var eventMonitors: [ObjectIdentifier: Any] = [:]
 
     func hostPresenter(webView: WKWebView) {
-        // Pick the secondary screen if available, otherwise the only one.
+        // Placement rules:
+        //  - Multi-monitor (production setup): fill the secondary
+        //    screen's visibleFrame (excludes menu bar / Dock so the
+        //    transparent-titlebar drag handle stays reachable).
+        //  - Single monitor (laptop / testing): open at a comfortable
+        //    centered 1280x720 window so the operator can drag /
+        //    resize / move it once a second display is connected.
         let screens = NSScreen.screens
-        let targetScreen = (screens.count > 1) ? screens[1] : screens.first
-        let frame = targetScreen?.frame ?? NSRect(x: 0, y: 0, width: 1280, height: 720)
+        let hasSecondary = screens.count > 1
+        let targetScreen = hasSecondary ? screens[1] : screens.first
 
+        let frame: NSRect
+        if hasSecondary, let s = targetScreen {
+            frame = s.visibleFrame
+        } else if let p = screens.first {
+            let w: CGFloat = min(1280, p.visibleFrame.width - 100)
+            let h: CGFloat = min(720, p.visibleFrame.height - 100)
+            frame = NSRect(
+                x: p.visibleFrame.midX - w / 2,
+                y: p.visibleFrame.midY - h / 2,
+                width: w,
+                height: h
+            )
+        } else {
+            frame = NSRect(x: 0, y: 0, width: 1280, height: 720)
+        }
+
+        // Why titled + transparent titlebar instead of .borderless:
+        // pure borderless windows have no drag region, and WKWebView
+        // captures every mouse event so .isMovableByWindowBackground
+        // doesn't fire either. A titled window with a hidden, transparent
+        // titlebar gives us a real OS-managed drag region in the top
+        // ~22px while looking visually borderless. .fullSizeContentView
+        // lets the WKWebView extend underneath the titlebar so no
+        // screen real estate is lost.
         let window = BorderlessKeyWindow(
             contentRect: frame,
-            styleMask: [.borderless, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false,
             screen: targetScreen
         )
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        // Hide all three traffic light buttons so the window looks
+        // genuinely borderless. Esc closes; Window menu re-fronts.
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
+
         window.contentView = webView
         window.title = "ZoomChat Display" // metadata for window manager / accessibility
         window.backgroundColor = .black
         window.isReleasedWhenClosed = false
-        // Lets the operator click-and-drag from any non-control area to
-        // reposition the window — borderless windows have no title bar
-        // to grab, so without this they're effectively pinned.
+        // Belt-and-suspenders: also enable background drag in case
+        // future React UI changes leave a non-interactive region the OS
+        // might pick up.
         window.isMovableByWindowBackground = true
         // Joins all spaces so the operator can switch desktops freely
         // without dragging the presenter window around.
