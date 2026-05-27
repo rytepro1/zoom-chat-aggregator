@@ -2,73 +2,146 @@
 
 What's been shipped, what's parked, and what's worth considering if the
 app keeps growing. See [`docs/CHAT-CAPTURE-ARCHITECTURE.md`](docs/CHAT-CAPTURE-ARCHITECTURE.md)
-for the deeper architecture context.
+for chat-pipeline context and [`docs/MONETIZATION-PLAN.md`](docs/MONETIZATION-PLAN.md)
+for the SaaS/billing direction.
 
 ---
 
-## ✅ Shipped (May 2026 revival sweep)
+## ✅ Shipped
 
-### 0. Real chat ingestion — Recall.ai integration
-Replaces the prior mock-only chat capture. A Meeting ID + passcode in the
-React UI dispatches a Recall bot (named "Chat Capture by RYTE
-Productions") which joins the meeting, captures chat, and POSTs it to
-our webhook. HMAC-signed via `RECALL_WEBHOOK_SECRET`. Works with
-external-host meetings — Recall handles OBF chaperoning on their side.
-Commits: `57ff1c9`, `67fa7e7`.
+### Core capture & storage
 
-### 1. Display window font sync
-Two compounding bugs fixed: SettingsContext now listens for `storage`
-events so settings changes in the main window propagate to the
-pop-out display in real time; ChatMessage `displayMode` reads
-`calc(var(--message-font-size) * var(--display-scale))` instead of
-hardcoded Tailwind sizes. New "Display View Scale" preset (1×–3×, 1.5×
-default) in Settings → Typography. Commit: `a94221b`.
+- **Real chat ingestion via Recall.ai** — operator pastes a Zoom
+  Meeting ID + passcode + chosen bot display name, server dispatches
+  a Recall bot, chat events stream back via signed webhook. HMAC
+  verification on `/webhook/recall/chat`. (`57ff1c9`, `67fa7e7`)
+- **Persistent Postgres storage** — every message + session writes
+  through to Railway Postgres. In-memory ring buffer hydrates from
+  current session on startup; Railway restarts mid-event are
+  invisible. Schema is idempotent (`CREATE TABLE IF NOT EXISTS` on
+  every boot). (`f79cd0f`)
+- **Bot usage tracking foundation** — `bot_usage` table populated on
+  every bot dispatch, closed out by `bot.done` / `bot.fatal` workspace
+  webhook (configured Recall-side at
+  `/webhook/recall/status`). Per-bot duration ready for billing
+  rollups. Disconnect path also closes the row. (`6980d49`)
+- **Tenant id placeholder** — `tenant_id` column on sessions /
+  messages / bot_usage / rosters / sent_messages, defaulting to
+  `'ryteproductions'`. Migration to real org IDs when multi-tenant
+  lands is a one-line `UPDATE`. (`6980d49`)
 
-### 2. Save & export individual chat messages
-Bookmark icon on every message → new **Saved** sidebar tab with three
-export options:
-- **Copy text** — plain-text attribution string
-- **PNG** — 1080×1080 (rendered at 2160×2160 for Retina) branded quote
-  card with room-color accent, adaptive font size, RYTE footer mark
-- **Export CSV / JSON** — bulk download all saved messages
-Server-side endpoints: `POST/DELETE /api/messages/:id/save`,
-`GET /api/saved`, `GET /api/saved/export.csv`. Commits: `f79cd0f`,
-`92afde7`.
+### Sessions
 
-### 3. Persistent log + sessions + smart exit dialog
-**Storage:** Postgres on Railway (Hobby plan, ~free). Schema:
-sessions(id, name, started_at, ended_at) + messages(...) with indices
-on session_id, saved, timestamp. MessageAggregator writes through on
-every addMessage and hydrates the in-memory ring buffer from the
-current session on startup. Railway restart mid-event is invisible.
-**Sessions:** SessionHeader in the app header shows current session
-name (click to rename), chevron menu with End & Start New / View Past
-Sessions actions. Past Sessions modal lists every session with name,
-dates, message + saved counts, and per-row CSV export.
-**Smart exit:** closing the window just hides the .app (Dock icon
-re-shows); ⌘-Q triggers a dialog: **End Session and Quit** / **Keep
-Running and Quit** / **Cancel**. Commits: `f79cd0f`, `6bac18d`,
-`741ca8a`.
+- **Named sessions** with rename / end & start new / past-sessions
+  browser. Each session is the unit of "one live event run." Past
+  sessions modal lists name, dates, message + saved counts, per-row
+  CSV export. (`6bac18d`)
+- **Smart exit dialog** — closing the main window hides it; ⌘-Q
+  prompts **End Session and Quit** / **Keep Running and Quit** /
+  **Cancel**. The "End Session" path calls `POST /api/sessions/end`
+  before terminating. (`741ca8a`)
 
-### 4. .app architecture pivot — thin client
-Original launcher bundled Node + project + node_modules (~226 MB) and
-ran a local server. Replaced with a 1.2 MB Swift WKWebView pointing
-directly at Railway. No secrets in the .app, no Node prerequisite on
-target Macs. Drag-and-drop installable on any Mac 13+. Commits:
-`eb3914f`, `426bad9`, `4ff1927`, `038cac3`, `d24bdd0`, `e4501d1`.
+### Operator outbound chat
 
-### 5. Presenter display window UX
-Pop-out window for the on-air host's confidence monitor:
-- Auto-places on the secondary screen if one's connected, otherwise
-  opens 1280×720 centered for setup
-- Looks borderless (transparent invisible titlebar + hidden traffic
-  lights) but drags from anywhere via `mouseDownCanMoveWindow` on a
-  WKWebView subclass
-- **Double-click** toggles native macOS full-screen with the standard
-  zoom animation
-- **⎋ Esc** exits full-screen first; second Esc closes the window
-- Window menu entry so the operator can re-front it if buried
-Commits in the same range as the .app pivot.
+- **Reply to a specific room** — inline Reply button on each chat
+  message, expands to a textarea, ⌘↩ to send. Goes to the originating
+  meeting only via Recall's `/bot/{id}/send_chat_message/`. (`6bb3a48`)
+- **Broadcast to all rooms** — collapsible inline composer at the top
+  of the chat feed (always visible, never scrolls away). Single
+  message fans out to every active bot in parallel. (`7d25e40`)
+- **Outgoing messages persist in the feed** with a colored "↩ Reply"
+  or "📢 Broadcast" pill alongside the bot name, subtle accent
+  background, accent left-edge stripe. Operator has visual confirmation
+  of what they sent. (`7d25e40`)
+- **Echo dedup** — if Recall webhooks back the bot's own outgoing
+  message via the chat-message event, MessageAggregator skips it
+  (matches recent outgoing by sender+content+meetingId within 5s).
+  No duplicates. (`7d25e40`)
+- **Per-bot outbound rate limit** — token bucket, 20 messages/min
+  per bot, refills every 60s. Belt-and-suspenders against accidental
+  loops and credential abuse. (`6bb3a48`)
+- **Sent-message audit log** — every reply + every broadcast writes
+  a row to `sent_messages` table (id, recall_bot_id, meeting_id,
+  session_id, tenant_id, text, is_broadcast, sent_at). (`6bb3a48`)
+
+### Operator identity
+
+- **Operator-chosen bot display name** — required field in the
+  Connect form, no vendor-branded default. Persists last-used in
+  localStorage so it's pre-filled next time. Means the bot appears
+  to meeting participants as e.g. "Audience Q&A" or "Producer
+  Theo" — whatever fits the event. (`6bb3a48`)
+
+### Saved messages + export
+
+- **Bookmark icon on every message** → new **Saved** sidebar tab.
+- **Per-message Copy text** — formatted plain-text quote with
+  attribution.
+- **PNG quote card export** — 1080×1080 (rendered at 2160×2160 for
+  Retina), accent-color left stripe + opening quote mark, adaptive
+  font sizing, sender name attribution. **No room pill, no brand
+  footer** (operator can add a custom brand later — see Future
+  Ideas). (`92afde7`, `9da9382`)
+- **Bulk CSV / JSON export** of saved messages for the current
+  session. (`f79cd0f`)
+
+### Rosters (one-click meeting deploy)
+
+- **Pre-built rosters** — operator creates a named list of meetings
+  ahead of an event (Meeting ID, passcode, room name, color, bot
+  name per entry). Lists in a new **Rosters** sidebar tab.
+- **One-click "Deploy"** dispatches bots to every entry in parallel,
+  per-entry success/failure feedback.
+- **Already-connected dedup** — re-deploying a roster doesn't
+  duplicate active bots (no extra Recall cost).
+- **Solves quit-and-rejoin pain** — if you ⌘-Q mid-event, just open
+  Rosters and click Deploy to reconnect everything at once.
+  (`1a6fede`)
+
+### .app (Mac launcher)
+
+- **Thin-client architecture** — 1.2 MB Swift WKWebView pointing at
+  the Railway URL. No bundled Node, no secrets in the .app, no
+  Node prerequisite on target Macs. Drag-and-drop installable on
+  any Mac 13+. (`eb3914f`)
+- **Single-instance Window** (not `WindowGroup`) — closing the
+  window hides; Dock click or Window menu reopens. Doesn't quit the
+  app. (`5e54863`)
+- **⌘R reload command** — pulls the latest deploy without
+  quit-and-relaunch. ⌘R or **View → Reload**. (`64d9e07`)
+- **Native download handler** — WKDownloadDelegate auto-saves
+  exported PNGs to `~/Downloads` (timestamp-suffixed if duplicate).
+  Fixed silent failure where WKWebView swallows `<a download>`
+  clicks on data: URLs. (`d488de6`)
+
+### Presenter display window (pop-out for secondary monitor)
+
+- **Auto-places on secondary screen** if connected, else 1280×720
+  centered.
+- **Borderless look, draggable from anywhere** — transparent
+  invisible titlebar + hidden traffic lights + `mouseDownCanMoveWindow`
+  on a WKWebView subclass.
+- **Double-click toggles native full-screen** with the standard zoom
+  animation.
+- **⎋ Esc** exits full-screen first; second Esc closes the window.
+- **In Window menu** so the operator can re-front it if buried.
+- **Font sync** with main window via storage events + scalable CSS
+  variables; "Display View Scale" preset in Typography settings
+  (1×–3×, 1.5× default).
+  (`a94221b`, `426bad9`, `4ff1927`, `038cac3`, `d24bdd0`, `e4501d1`)
+
+### Architecture pivot docs
+
+- [`docs/CHAT-CAPTURE-ARCHITECTURE.md`](docs/CHAT-CAPTURE-ARCHITECTURE.md)
+  records the RTMS → Meeting SDK → Recall decision history. RTMS was
+  initially planned but doesn't fit cross-org meetings; Meeting SDK
+  was considered; Recall picked because they handle OBF chaperoning
+  for us and abstract away the SDK + Docker complexity.
+- [`docs/MONETIZATION-PLAN.md`](docs/MONETIZATION-PLAN.md) is the
+  end-to-end plan for converting the tool into a SaaS: pricing
+  tiers (Solo $49 / Pro $199 / Studio $499 with concurrent-bot
+  caps), auth (Clerk vs Lucia decision), Stripe Billing, phased
+  implementation (~4-6 weeks dev + ~2 weeks legal).
 
 ---
 
@@ -98,6 +171,25 @@ Secrets → Create new → `railway variables --set "RECALL_WEBHOOK_SECRET=whsec
 These came up during build but weren't asked for. Worth considering as
 the tool matures.
 
+### Custom brand mark on PNG quote cards
+We removed the hardcoded "RYTE PRODUCTIONS" footer from quote cards
+because the operator-pick-everything principle suggests branding
+should be operator-chosen too. To bring back configurable branding:
+
+- Add a **Settings → Branding** section (settings panel already has
+  most plumbing) with a single text field **"Brand mark (PNG
+  exports)"**, defaulting to empty.
+- Wire `settings.brandMark` into `QuoteCard.jsx`'s render: when set,
+  show in the bottom-right slot we cleared out (~18px, letter-spaced,
+  semi-opaque white, same position as the old hardcoded footer).
+- When empty (default), no footer renders.
+- ~15 minutes of work. Same pattern lets each client put their own
+  brand on cards if they want — RYTE could put "RYTE PRODUCTIONS",
+  a corporate client could put "Acme Corp Q3 2026", etc.
+- **Stretch:** also allow a small logo URL or upload, rendered as a
+  semi-opaque image. More work (~1-2 hours to handle file upload,
+  hosting, sizing). Not needed for v1.
+
 ### Past-session message browser (read in app)
 Currently you can list past sessions and download their saved-message
 CSV, but the full chat log of a past session is only viewable by
@@ -126,21 +218,13 @@ be a websocket nudge in the React UI.
 
 ### Multi-tenant SaaS / monetization
 Full plan in [`docs/MONETIZATION-PLAN.md`](docs/MONETIZATION-PLAN.md).
-TL;DR: charge customers per bot-hour with tiered subscriptions to
-cover Recall costs + margin. Requires multi-tenant auth (Clerk
-recommended), usage tracking (Recall `bot.status_change` webhooks),
-and Stripe Billing. ~4–6 weeks of dev + ~2 weeks of legal/policy to
-go from current state to "charging real customers." Not urgent —
+TL;DR: charge customers per bot-hour with tiered subscriptions (Solo
+$49 / Pro $199 / Studio $499) to cover Recall costs + margin.
+Requires multi-tenant auth (Clerk vs Lucia decision deferred to
+Phase 1 start), usage tracking (already gathering via `bot_usage`),
+and Stripe Billing. **~4-6 weeks of dev + ~2 weeks of legal/policy**
+to go from current state to "charging real customers." Not urgent —
 gather real-event usage data first, then commit to the rebuild.
-
-Two no-regret moves that make the eventual rebuild easier and can
-land any time:
-- Subscribe to Recall's `bot.status_change` webhook, log join/leave
-  times to a simple table. Builds a real-bot-hour dataset to inform
-  pricing decisions.
-- Add a `tenant_id` placeholder column to sessions / messages /
-  saved (default to a constant). Schema migration to real org_ids
-  later becomes a one-line UPDATE.
 
 ### "Hide cursor in showtime" toggle
 Removed the auto-hide-after-3s during the revival because it clashed
@@ -149,55 +233,18 @@ with borderless-window setup. A single button in the SessionHeader
 show would be the right way to bring it back without the setup
 friction.
 
-### Operator-sends-chat (reply-all only)
-Recall's bot API supports `POST /api/v1/bot/{id}/send_chat_message/`.
-We could surface a "Reply" affordance in the React UI that posts a
-message back into the meeting as the bot. Decisions made:
-- **Scope:** reply-to-all only for v1. No DMs (privacy/compliance
-  risk — see MONETIZATION-PLAN.md).
-- **Identity:** operator picks the display name the bot uses per
-  meeting (not stuck with "Chat Capture by RYTE Productions").
-  Probably a field in the Meeting Manager's connect form, defaulting
-  to a session-wide setting.
-- **Rate limit:** server-side cap (e.g. 30 messages/minute per bot)
-  with a clear error if exceeded. Belt-and-suspenders against
-  accidental loops and credential-compromise abuse.
-- **Audit log:** every sent message logged with sender (auth user
-  once we have auth), bot id, meeting id, timestamp.
-- **Reply mechanism:** could be either an inline reply button on each
-  ChatMessage (replies-in-context UX) or a dedicated compose box at
-  the bottom of the feed. Inline probably feels more natural for
-  "answering an audience question."
-- **Tier-gating (post-monetization):** Solo = capture only; Pro+ =
-  capture + reply.
-
-Effort: ~1 day for the basic "reply to all" wired into the existing
-chat flow. Replies round-trip through our own /webhook/recall/chat so
-they show up in the feed automatically, no special persistence.
-
 ### Multi-operator polish
 Multi-operator already works (shared backend → both operators see
-the same live state synced via Socket.io and Postgres). Refinements
-worth doing eventually:
+the same live state synced via Socket.io and Postgres, bot dispatch
+dedupes so 2 operators on 1 meeting = 1 bot). Refinements worth doing
+eventually:
 - **Presence indicator** in the header: "Theo and Sarah are
-  moderating." Socket.io makes this trivial — track connected client
-  count + identity, emit a presence event on connect/disconnect.
-  Probably tier-gated to Pro+ since Solo is single-operator by
-  definition.
-- **Per-action attribution.** Lands naturally with multi-user auth
-  in monetization Phase 1: store `featured_by_user_id`,
-  `saved_by_user_id`, etc. on moderation/save events. Surface as a
-  tooltip ("featured by Sarah, 2 min ago") on highlighted messages.
-- **Conflict UX.** Today's "last write wins" is fine in practice
-  (operators talk to each other) but pathological races during a
-  hot moment are possible. Could add a brief "Sarah just featured a
-  different message" toast notification when a feature changes from
-  someone else's hand within 2 seconds of your own intent.
-- **Observer mode / role differentiation.** Right now every operator
-  has equal moderation powers. Tier-gated as a Pro+ feature later:
-  admin/operator/observer roles, with observers seeing the feed but
-  unable to feature/save.
-
-Effort: presence indicator is ~half a day standalone. Attribution
-piggybacks on the auth rebuild (free if done together). Conflict UX
-and observer mode are nice-to-have polish, ~1-2 days each.
+  moderating." Socket.io makes this trivial.
+- **Per-action attribution** — store `featured_by_user_id`,
+  `saved_by_user_id`, etc. on moderation/save events. Lands free with
+  the multi-user auth rebuild.
+- **Conflict UX** — toast notification when another operator
+  features a different message within 2 seconds of yours.
+- **Observer mode** — role differentiation (admin / operator /
+  observer) so non-moderating viewers can watch the feed without
+  feature/save powers.
