@@ -78,6 +78,26 @@ export default function AccountMenu() {
               </div>
             )}
           </div>
+          {(org.planTier === 'trial' || org.planTier === 'canceled') && (
+            <a
+              href="/upgrade"
+              style={{ ...menuItem, color: '#60a5fa', textDecoration: 'none' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(59,130,246,0.1)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              ⬆  Upgrade to Solo — $49/mo
+            </a>
+          )}
+          {org.planTier === 'solo' && (
+            <a
+              href="/upgrade"
+              style={{ ...menuItem, color: '#cbd5e1', textDecoration: 'none' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              Manage billing
+            </a>
+          )}
           <button
             onClick={async () => { await logout(); window.location.href = '/signin'; }}
             style={menuItem}
