@@ -57,7 +57,6 @@ const orgState = new OrgState({ io });
 const trialEnforcer = new TrialEnforcer({ db: null, io, recallBotManager, orgState });
 const stripeService = new StripeService({
   secretKey: process.env.STRIPE_SECRET_KEY,
-  priceIdSolo: process.env.STRIPE_PRICE_ID_SOLO,
   webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
 });
 

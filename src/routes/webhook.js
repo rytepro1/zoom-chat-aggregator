@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { RTMSManager } from '../rtms/RTMSManager.js';
 import { verifyRecallWebhook } from '../recall/verifyRecallWebhook.js';
+import { getTier } from '../services/tiers.js';
 
 const router = express.Router();
 
@@ -231,44 +232,63 @@ router.post('/stripe', async (req, res) => {
         const session = event.data.object;
         const orgId = session.metadata?.org_id;
         const subscriptionId = session.subscription;
-        if (!orgId) {
-          console.warn('[stripe webhook] checkout.session.completed without org_id metadata');
+        if (!orgId || !subscriptionId) {
+          console.warn('[stripe webhook] checkout.session.completed missing org_id or subscription');
           break;
+        }
+        // Fetch the subscription to read its line item's price → resolve
+        // to a tier. Metadata.tier_key is the fast path (set by our
+        // createCheckoutSession), but we fall back to price-id mapping
+        // in case metadata was stripped or the sub was created out-of-band.
+        let tier = null;
+        const tierKey = session.metadata?.tier_key;
+        if (tierKey) tier = getTier(tierKey);
+        if (!tier) {
+          tier = await resolveTierFromSubscription(stripe, subscriptionId);
+        }
+        if (!tier) {
+          console.warn(`[stripe webhook] could not resolve tier for sub ${subscriptionId} — defaulting to solo`);
+          tier = { key: 'solo', concurrentBotLimit: 1, name: 'Solo' };
         }
         if (db) {
           await db.query(
             `UPDATE organizations
-                SET plan_tier               = 'solo',
-                    concurrent_bot_limit    = 1,
+                SET plan_tier               = $2,
+                    concurrent_bot_limit    = $3,
                     trial_minutes_remaining = NULL,
-                    stripe_subscription_id  = $2
+                    stripe_subscription_id  = $4
               WHERE id = $1`,
-            [orgId, subscriptionId]
+            [orgId, tier.key, tier.concurrentBotLimit, subscriptionId]
           );
         }
-        console.log(`[stripe webhook] org ${orgId} upgraded to solo (sub ${subscriptionId})`);
+        console.log(`[stripe webhook] org ${orgId} upgraded to ${tier.key} (${tier.concurrentBotLimit} bots, sub ${subscriptionId})`);
         break;
       }
 
       case 'customer.subscription.updated': {
         const sub = event.data.object;
         const orgId = sub.metadata?.org_id;
-        // status: active | past_due | canceled | unpaid | trialing
         const status = sub.status;
         if (!orgId) break;
-        // For now: keep solo while active/trialing/past_due, demote
-        // when actually canceled (we also get a delete event for that).
+        // Keep the org tier in sync with the subscription's current
+        // line item — this handles tier upgrades / downgrades initiated
+        // from the Stripe Customer Portal.
         if (db && (status === 'active' || status === 'trialing')) {
-          await db.query(
-            `UPDATE organizations
-                SET plan_tier            = 'solo',
-                    concurrent_bot_limit = 1,
-                    stripe_subscription_id = $2
-              WHERE id = $1`,
-            [orgId, sub.id]
-          );
+          const tier = await resolveTierFromSubscription(stripe, sub.id);
+          if (tier) {
+            await db.query(
+              `UPDATE organizations
+                  SET plan_tier              = $2,
+                      concurrent_bot_limit   = $3,
+                      stripe_subscription_id = $4
+                WHERE id = $1`,
+              [orgId, tier.key, tier.concurrentBotLimit, sub.id]
+            );
+            console.log(`[stripe webhook] org ${orgId} sub ${sub.id} → ${tier.key} (${status})`);
+          }
+        } else {
+          console.log(`[stripe webhook] org ${orgId} sub ${sub.id} status=${status} — no tier change`);
         }
-        console.log(`[stripe webhook] org ${orgId} subscription ${sub.id} → ${status}`);
         break;
       }
 
@@ -291,7 +311,6 @@ router.post('/stripe', async (req, res) => {
       }
 
       default:
-        // Many event types arrive; we ignore the ones we don't act on.
         console.log(`[stripe webhook] ignored event: ${event.type}`);
     }
   } catch (err) {
@@ -301,6 +320,23 @@ router.post('/stripe', async (req, res) => {
 
   res.json({ received: true });
 });
+
+/**
+ * Helper — given a Stripe subscription id, pull the subscription, find
+ * the first line item's price id, and look up our tier definition.
+ * Returns null if we can't resolve (unconfigured price id, API error).
+ */
+async function resolveTierFromSubscription(stripeService, subscriptionId) {
+  try {
+    const sub = await stripeService.client.subscriptions.retrieve(subscriptionId);
+    const priceId = sub.items?.data?.[0]?.price?.id;
+    if (!priceId) return null;
+    return stripeService.tierForPriceId(priceId);
+  } catch (err) {
+    console.error(`[stripe webhook] resolveTierFromSubscription(${subscriptionId}) failed:`, err.message);
+    return null;
+  }
+}
 
 router.post('/recall/status', (req, res) => {
   const recallBotManager = req.app.get('recallBotManager');

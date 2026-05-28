@@ -85,10 +85,10 @@ export default function AccountMenu() {
               onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(59,130,246,0.1)'}
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
             >
-              ⬆  Upgrade to Solo — $49/mo
+              ⬆  Upgrade — view plans
             </a>
           )}
-          {org.planTier === 'solo' && (
+          {['solo', 'pro', 'studio'].includes(org.planTier) && (
             <a
               href="/upgrade"
               style={{ ...menuItem, color: '#cbd5e1', textDecoration: 'none' }}

@@ -57,7 +57,7 @@ export default function TrialBanner() {
           fontSize: 12,
         }}
       >
-        Upgrade — $49/mo
+        Upgrade
       </a>
     </div>
   );

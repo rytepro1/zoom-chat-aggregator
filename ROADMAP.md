@@ -248,3 +248,32 @@ eventually:
 - **Observer mode** — role differentiation (admin / operator /
   observer) so non-moderating viewers can watch the feed without
   feature/save powers.
+
+### Multi-org membership per user
+Currently `users.org_id` is a foreign key — every user belongs to
+exactly one org. Inviting an email that already has an account
+returns "user already exists, sign in to that account instead."
+Works fine for the "client signs up fresh and is the only user of
+their org" scenario, but falls apart for agencies or freelancers who
+want to be a member of multiple client orgs from a single account
+(the Slack / Linear / Notion shape).
+
+Sketch when this is needed:
+- New `org_memberships(user_id, org_id, role, joined_at)` join table
+  becomes the source of truth.
+- Deprecate `users.org_id` (keep as denormalized "primary org" or
+  drop entirely).
+- Store **active org** on the auth session row, not the user. Add
+  `POST /api/auth/switch-org` that updates session.active_org_id.
+- Every query that currently filters by `req.org.id` instead reads
+  from the session's active org + verifies membership exists.
+- UI: org switcher in the AccountMenu (avatar dropdown), invite-accept
+  flow detects existing user → "Join `{org}` as `{role}`" button
+  instead of the password form, no new account created.
+- Edge cases: invite to an org you're already in (idempotent or
+  409?), demoting the last admin of an org (block), leaving an org
+  you're the sole member of (delete the org? archive it?).
+
+Estimate: ~1-2 focused days. Don't pre-build — wait for a real
+customer to ask. Trying to anticipate the shape now risks landing the
+wrong abstraction.

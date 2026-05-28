@@ -24,23 +24,21 @@ export default function TrialExhaustedModal() {
         <h2 style={title}>Your free trial is up</h2>
         <p style={subtitle}>
           You've used your 30 minutes of bot runtime. Active bots have been
-          disconnected. Upgrade to Solo to keep monitoring rooms.
+          disconnected. Pick a plan to keep monitoring rooms.
         </p>
 
         <div style={pricing}>
-          <div style={tierName}>Solo</div>
-          <div style={tierPrice}>$49<span style={{ fontSize: 18, color: '#94a3b8' }}>/mo</span></div>
+          <div style={tierName}>Plans</div>
           <ul style={features}>
-            <li>1 concurrent meeting bot</li>
-            <li>Unlimited bot-hours</li>
-            <li>Saved messages, rosters, presenter view</li>
-            <li>Cancel anytime</li>
+            <li><b>Solo</b> — $49.99/mo, 1 concurrent bot</li>
+            <li><b>Pro</b> — $199/mo, 5 concurrent bots</li>
+            <li><b>Studio</b> — $499/mo, 20 concurrent bots</li>
           </ul>
         </div>
 
-        <a href="/upgrade" style={primaryBtn}>Upgrade to Solo — $49/mo</a>
+        <a href="/upgrade" style={primaryBtn}>View plans &amp; upgrade</a>
         <p style={{ marginTop: 16, fontSize: 12, color: '#64748b' }}>
-          Need more concurrent bots? Pro and Studio tiers coming soon.
+          Cancel any time from your account.
         </p>
       </div>
     </div>
