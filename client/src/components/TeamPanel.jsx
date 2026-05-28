@@ -20,6 +20,16 @@ export default function TeamPanel() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('operator');
   const [inviting, setInviting] = useState(false);
+  // Two-click confirm pattern (works in WKWebView, where window.confirm
+  // is a no-op by default). Tracks which action is awaiting a 2nd click.
+  // Keyed as `${action}:${id}`. Auto-resets after 3s.
+  const [pendingConfirm, setPendingConfirm] = useState(null);
+  const armConfirm = (key) => {
+    setPendingConfirm(key);
+    setTimeout(() => {
+      setPendingConfirm(prev => (prev === key ? null : prev));
+    }, 3000);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -64,7 +74,9 @@ export default function TeamPanel() {
   };
 
   const revoke = async (id) => {
-    if (!confirm('Revoke this invitation?')) return;
+    const key = `revoke:${id}`;
+    if (pendingConfirm !== key) { armConfirm(key); return; }
+    setPendingConfirm(null);
     setError(null);
     try {
       const res = await fetch(`/api/invitations/${id}`, { method: 'DELETE', credentials: 'include' });
@@ -78,8 +90,10 @@ export default function TeamPanel() {
     }
   };
 
-  const removeMember = async (id, email) => {
-    if (!confirm(`Remove ${email}? They lose access immediately.`)) return;
+  const removeMember = async (id) => {
+    const key = `remove:${id}`;
+    if (pendingConfirm !== key) { armConfirm(key); return; }
+    setPendingConfirm(null);
     setError(null);
     try {
       const res = await fetch(`/api/invitations/members/${id}`, { method: 'DELETE', credentials: 'include' });
@@ -161,12 +175,21 @@ export default function TeamPanel() {
               <option value="admin">Admin</option>
             </select>
             <button
-              onClick={() => removeMember(m.id, m.email)}
+              onClick={() => removeMember(m.id)}
               disabled={m.id === user.id}
-              style={{ ...btnDanger, opacity: m.id === user.id ? 0.3 : 1, cursor: m.id === user.id ? 'not-allowed' : 'pointer' }}
+              style={{
+                ...btnDanger,
+                opacity: m.id === user.id ? 0.3 : 1,
+                cursor: m.id === user.id ? 'not-allowed' : 'pointer',
+                background: pendingConfirm === `remove:${m.id}` ? 'rgba(239,68,68,0.2)' : 'transparent',
+                borderRadius: 4,
+                padding: pendingConfirm === `remove:${m.id}` ? '4px 8px' : '4px 8px',
+                fontSize: pendingConfirm === `remove:${m.id}` ? 11 : 14,
+                fontWeight: pendingConfirm === `remove:${m.id}` ? 600 : 'normal',
+              }}
               title={m.id === user.id ? "You can't remove yourself" : 'Remove from org'}
             >
-              ✕
+              {pendingConfirm === `remove:${m.id}` ? 'Confirm?' : '✕'}
             </button>
           </div>
         ))}
@@ -187,7 +210,15 @@ export default function TeamPanel() {
                     {inv.role} · expires {new Date(inv.expires_at).toLocaleDateString()}
                   </div>
                 </div>
-                <button onClick={() => revoke(inv.id)} style={btnGhost}>Revoke</button>
+                <button
+                  onClick={() => revoke(inv.id)}
+                  style={{
+                    ...btnGhost,
+                    background: pendingConfirm === `revoke:${inv.id}` ? 'rgba(239,68,68,0.2)' : 'transparent',
+                  }}
+                >
+                  {pendingConfirm === `revoke:${inv.id}` ? 'Confirm?' : 'Revoke'}
+                </button>
               </div>
             ))}
           </div>
