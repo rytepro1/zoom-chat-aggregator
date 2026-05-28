@@ -194,6 +194,114 @@ router.post('/recall/chat', (req, res) => {
  * billing layer per docs/MONETIZATION-PLAN.md. Same signature
  * verification as /recall/chat; same 200-always policy.
  */
+/**
+ * Stripe webhook — fires on subscription lifecycle events. We rely on
+ * Stripe's signature verification (constructEvent), so this route MUST
+ * see the raw request body. The express.json() middleware in index.js
+ * captures rawBody on every request, so we use that.
+ *
+ * Events handled:
+ *   - checkout.session.completed       → first-time upgrade success
+ *   - customer.subscription.updated    → plan changes / renewals
+ *   - customer.subscription.deleted    → cancellation reached period end
+ *
+ * Always 200 on accepted events so Stripe doesn't retry on our internal
+ * errors (we log instead). The exception is verification failure — that's
+ * a real 400 so Stripe surfaces it in their dashboard.
+ */
+router.post('/stripe', async (req, res) => {
+  const stripe = req.app.get('stripeService');
+  const db = req.app.get('db');
+  if (!stripe?.isConfigured()) {
+    return res.status(503).json({ error: 'Stripe not configured' });
+  }
+
+  let event;
+  try {
+    const signature = req.headers['stripe-signature'];
+    event = stripe.verifyWebhook(req.rawBody, signature);
+  } catch (err) {
+    console.warn('[stripe webhook] signature verification failed:', err.message);
+    return res.status(400).json({ error: 'Invalid signature' });
+  }
+
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        const orgId = session.metadata?.org_id;
+        const subscriptionId = session.subscription;
+        if (!orgId) {
+          console.warn('[stripe webhook] checkout.session.completed without org_id metadata');
+          break;
+        }
+        if (db) {
+          await db.query(
+            `UPDATE organizations
+                SET plan_tier               = 'solo',
+                    concurrent_bot_limit    = 1,
+                    trial_minutes_remaining = NULL,
+                    stripe_subscription_id  = $2
+              WHERE id = $1`,
+            [orgId, subscriptionId]
+          );
+        }
+        console.log(`[stripe webhook] org ${orgId} upgraded to solo (sub ${subscriptionId})`);
+        break;
+      }
+
+      case 'customer.subscription.updated': {
+        const sub = event.data.object;
+        const orgId = sub.metadata?.org_id;
+        // status: active | past_due | canceled | unpaid | trialing
+        const status = sub.status;
+        if (!orgId) break;
+        // For now: keep solo while active/trialing/past_due, demote
+        // when actually canceled (we also get a delete event for that).
+        if (db && (status === 'active' || status === 'trialing')) {
+          await db.query(
+            `UPDATE organizations
+                SET plan_tier            = 'solo',
+                    concurrent_bot_limit = 1,
+                    stripe_subscription_id = $2
+              WHERE id = $1`,
+            [orgId, sub.id]
+          );
+        }
+        console.log(`[stripe webhook] org ${orgId} subscription ${sub.id} → ${status}`);
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object;
+        const orgId = sub.metadata?.org_id;
+        if (orgId && db) {
+          await db.query(
+            `UPDATE organizations
+                SET plan_tier               = 'canceled',
+                    concurrent_bot_limit    = 0,
+                    trial_minutes_remaining = 0,
+                    stripe_subscription_id  = NULL
+              WHERE id = $1`,
+            [orgId]
+          );
+          console.log(`[stripe webhook] org ${orgId} subscription canceled — bot dispatch disabled`);
+        }
+        break;
+      }
+
+      default:
+        // Many event types arrive; we ignore the ones we don't act on.
+        console.log(`[stripe webhook] ignored event: ${event.type}`);
+    }
+  } catch (err) {
+    console.error('[stripe webhook] handler error:', err);
+    // Still 200 — Stripe shouldn't retry on our internal failures.
+  }
+
+  res.json({ received: true });
+});
+
 router.post('/recall/status', (req, res) => {
   const recallBotManager = req.app.get('recallBotManager');
   if (!recallBotManager) {

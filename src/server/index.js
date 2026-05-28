@@ -8,6 +8,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import webhookRoutes from '../routes/webhook.js';
 import authRouter from '../routes/auth.js';
+import billingRouter from '../routes/billing.js';
+import { StripeService } from '../services/StripeService.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { RosterManager } from '../services/RosterManager.js';
 import { OrgState } from '../services/OrgState.js';
@@ -52,12 +54,18 @@ const orgState = new OrgState({ io });
 // TrialEnforcer is constructed without db here; start() is called from
 // start() once db is initialized.
 const trialEnforcer = new TrialEnforcer({ db: null, io, recallBotManager, orgState });
+const stripeService = new StripeService({
+  secretKey: process.env.STRIPE_SECRET_KEY,
+  priceIdSolo: process.env.STRIPE_PRICE_ID_SOLO,
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+});
 
 app.set('rosterManager', rosterManager);
 app.set('rtmsManager', rtmsManager);
 app.set('recallBotManager', recallBotManager);
 app.set('orgState', orgState);
 app.set('trialEnforcer', trialEnforcer);
+app.set('stripeService', stripeService);
 app.set('io', io);
 
 // ---- Middleware ----
@@ -113,6 +121,10 @@ app.use('/webhook', webhookRoutes);
 
 // Auth routes (signup, login, logout, /me, verify-email, password-reset)
 app.use('/api/auth', authRouter());
+
+// Billing routes (Stripe Checkout + Customer Portal). Mounted under
+// /api so the requireAuth middleware below catches both.
+app.use('/api/billing', billingRouter());
 
 // ---- Authenticated /api/* routes ----
 //
@@ -574,6 +586,7 @@ async function start() {
   recallBotManager.db = db;
   recallBotManager.orgState = orgState;
   trialEnforcer.db = db;
+  stripeService.db = db;
 
   // Register Socket.io handlers now that `db` is available (the auth
   // middleware needs it on every handshake).
