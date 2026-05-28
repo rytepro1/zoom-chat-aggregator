@@ -1,5 +1,7 @@
 import React from 'react';
 import { useSettings } from '../contexts/SettingsContext';
+import { useAuth } from '../contexts/AuthContext';
+import TeamPanel from './TeamPanel';
 
 function SettingsPanel() {
   const {
@@ -10,6 +12,7 @@ function SettingsPanel() {
     settingsPanelOpen,
     setSettingsPanelOpen
   } = useSettings();
+  const { user } = useAuth();
 
   if (!settingsPanelOpen) return null;
 
@@ -218,6 +221,13 @@ function SettingsPanel() {
               placeholder="e.g. RYTE PRODUCTIONS"
             />
           </Section>
+
+          {/* Team — admin-only. Hidden for operators and unsigned-in. */}
+          {user?.role === 'admin' && (
+            <Section title="Team">
+              <TeamPanel />
+            </Section>
+          )}
 
           {/* Reset */}
           <div className="pt-4 border-t border-white/10">

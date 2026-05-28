@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 import webhookRoutes from '../routes/webhook.js';
 import authRouter from '../routes/auth.js';
 import billingRouter from '../routes/billing.js';
+import invitationsRouter from '../routes/invitations.js';
 import { StripeService } from '../services/StripeService.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { RosterManager } from '../services/RosterManager.js';
@@ -125,6 +126,11 @@ app.use('/api/auth', authRouter());
 // Billing routes (Stripe Checkout + Customer Portal). Mounted under
 // /api so the requireAuth middleware below catches both.
 app.use('/api/billing', billingRouter());
+
+// Invitations routes — admin ops require auth (applied per-route),
+// /accept/:token + POST /accept are public. Mounted BEFORE the global
+// requireAuth gate so the public routes stay public.
+app.use('/api/invitations', invitationsRouter());
 
 // ---- Authenticated /api/* routes ----
 //

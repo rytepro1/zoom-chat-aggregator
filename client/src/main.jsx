@@ -7,6 +7,7 @@ import AuthPage from './pages/AuthPage.jsx'
 import VerifyEmailPage from './pages/VerifyEmailPage.jsx'
 import ResetPasswordPage from './pages/ResetPasswordPage.jsx'
 import UpgradePage from './pages/UpgradePage.jsx'
+import AcceptInvitePage from './pages/AcceptInvitePage.jsx'
 import { SettingsProvider } from './contexts/SettingsContext.jsx'
 import { SocketProvider } from './contexts/SocketContext.jsx'
 import { AuthProvider, useAuth } from './contexts/AuthContext.jsx'
@@ -60,6 +61,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/signin" element={<RedirectIfAuthed><AuthPage /></RedirectIfAuthed>} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
             <Route path="/upgrade" element={<RequireAuth><UpgradePage /></RequireAuth>} />
 
             {/* Authenticated app */}
