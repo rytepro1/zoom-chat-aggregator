@@ -95,7 +95,7 @@ export default function AccountMenu() {
               onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
             >
-              Manage billing
+              Manage subscription
             </a>
           )}
           <button
