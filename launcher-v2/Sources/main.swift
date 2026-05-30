@@ -226,6 +226,69 @@ final class WebViewCoordinator: NSObject, WKUIDelegate, WKNavigationDelegate, WK
         return newWebView
     }
 
+    // MARK: - JavaScript dialogs (window.alert / confirm / prompt)
+    //
+    // WKWebView ignores these by default — alert() resolves silently,
+    // confirm() returns undefined (falsy), prompt() returns null.
+    // Implementing the three WKUIDelegate methods below presents native
+    // NSAlert dialogs so existing/future React code using window.alert,
+    // window.confirm, and window.prompt Just Works inside the .app.
+    // (In a normal browser these all work without any host help.)
+
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptAlertPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping () -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = "ZoomChat"
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+        completionHandler()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = "ZoomChat"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")     // .alertFirstButtonReturn
+        alert.addButton(withTitle: "Cancel") // .alertSecondButtonReturn
+        let response = alert.runModal()
+        completionHandler(response == .alertFirstButtonReturn)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptTextInputPanelWithPrompt prompt: String,
+        defaultText: String?,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (String?) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = "ZoomChat"
+        alert.informativeText = prompt
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")     // .alertFirstButtonReturn
+        alert.addButton(withTitle: "Cancel") // .alertSecondButtonReturn
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        input.stringValue = defaultText ?? ""
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+
+        let response = alert.runModal()
+        completionHandler(response == .alertFirstButtonReturn ? input.stringValue : nil)
+    }
+
     // MARK: - Downloads (PNG quote-card export from the React UI)
 
     /// Recognize `<a download>` clicks as downloads instead of
