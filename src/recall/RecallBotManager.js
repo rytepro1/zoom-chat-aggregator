@@ -452,6 +452,31 @@ export class RecallBotManager {
           [botId, status]
         );
         console.log(`[Recall] bot_usage closed for ${botId} (${status})`);
+
+        // Clear in-memory state so the operator can immediately
+        // redispatch a fresh bot. Without this, our duplication guard
+        // (`already has a bot for meeting`) blocks redeploys even
+        // though the actual Recall bot is gone.
+        const meetingId = this.meetingsByBot.get(botId);
+        if (meetingId) {
+          const botInfo = this.botsByMeeting.get(meetingId);
+          this.meetingsByBot.delete(botId);
+          this.botsByMeeting.delete(meetingId);
+          // Surface the disconnect in the operator UI so the meeting
+          // tile flips out of "connected" and the room is removed.
+          if (botInfo && this.orgState) {
+            try {
+              const entry = this.orgState.peek(botInfo.orgId);
+              if (entry) entry.ma.removeRoom(meetingId);
+              // Direct emit too so the meetings list updates even if
+              // no MA subscriber is around.
+              entry?.ma?.io?.to(`org:${botInfo.orgId}`).emit('meetingDisconnected', { id: meetingId });
+            } catch (e) {
+              console.error('[Recall] post-terminal UI cleanup failed:', e.message);
+            }
+          }
+          console.log(`[Recall] cleared in-memory bot ${botId} for meeting ${meetingId} (${status})`);
+        }
       } else if (status) {
         await this.db.query(
           `UPDATE bot_usage SET last_status = $2 WHERE recall_bot_id = $1`,
