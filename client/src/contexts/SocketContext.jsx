@@ -70,12 +70,25 @@ export function SocketProvider({ children }) {
       setStats(data.stats || { totalMessages: 0, activeRooms: 0 });
     });
 
-    // New message received
+    // New message received — server now ships batched arrays every
+    // 100ms (high-volume rooms). We unpack into a single setState per
+    // batch so React only re-renders once per window even at 400+
+    // msgs/sec.
+    newSocket.on('newMessageBatch', (batch) => {
+      if (!Array.isArray(batch) || batch.length === 0) return;
+      setMessages(prev => [...prev, ...batch].slice(-500));
+      setStats(prev => ({
+        ...prev,
+        totalMessages: prev.totalMessages + batch.length,
+      }));
+    });
+    // Legacy single-message event — kept for resilience if a stale
+    // server is ever in the chain. Current server only emits batches.
     newSocket.on('newMessage', (message) => {
       setMessages(prev => [...prev, message].slice(-500));
       setStats(prev => ({
         ...prev,
-        totalMessages: prev.totalMessages + 1
+        totalMessages: prev.totalMessages + 1,
       }));
     });
 

@@ -244,8 +244,10 @@ export async function initDatabase({ databaseUrl, retries = 5, retryDelayMs = 20
     // Railway's internal Postgres doesn't need TLS; the public proxy
     // does. Detect by hostname.
     ssl: /\.proxy\.rlwy\.net/.test(databaseUrl) ? { rejectUnauthorized: false } : false,
-    // Keep the pool small — single web service, ephemeral writes.
-    max: 5,
+    // Bumped from 5 → 25 to handle high-volume rooms (50+ msgs/sec
+    // per room, multiple rooms simultaneously). Each chat message is
+    // a single INSERT, and a too-small pool means writes queue up.
+    max: 25,
     idleTimeoutMillis: 30000,
   });
 

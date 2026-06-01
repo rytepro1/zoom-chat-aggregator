@@ -21,6 +21,49 @@ export class MessageAggregator {
     this.messages = [];
     this.rooms = new Map();
     this.maxMessages = 500;
+
+    // Batched socket emit pipeline (high-volume rooms). At >50 msgs/sec
+    // emitting per-message floods Socket.io and the React client. We
+    // collect inbound messages for 100ms then ship them as a single
+    // `newMessageBatch` event (+ per-meeting `roomMessageBatch`) so
+    // the client does one setState per window instead of dozens.
+    this._pendingEmits = [];
+    this._pendingRoomEmits = new Map(); // meetingId -> [messages]
+    this._flushTimer = null;
+    this.emitBatchMs = 100;
+  }
+
+  _scheduleFlush() {
+    if (this._flushTimer) return;
+    this._flushTimer = setTimeout(() => this._flushEmits(), this.emitBatchMs);
+  }
+
+  _flushEmits() {
+    this._flushTimer = null;
+    if (this._pendingEmits.length > 0) {
+      const batch = this._pendingEmits;
+      this._pendingEmits = [];
+      this._emit('newMessageBatch', batch);
+    }
+    if (this._pendingRoomEmits.size > 0) {
+      for (const [meetingId, batch] of this._pendingRoomEmits) {
+        this.io
+          .to(`org:${this.orgId}:room:${meetingId}`)
+          .emit('roomMessageBatch', batch);
+      }
+      this._pendingRoomEmits.clear();
+    }
+  }
+
+  _queueMessageEmit(message) {
+    this._pendingEmits.push(message);
+    if (message.meetingId) {
+      if (!this._pendingRoomEmits.has(message.meetingId)) {
+        this._pendingRoomEmits.set(message.meetingId, []);
+      }
+      this._pendingRoomEmits.get(message.meetingId).push(message);
+    }
+    this._scheduleFlush();
   }
 
   get roomName() {
@@ -87,14 +130,10 @@ export class MessageAggregator {
     this.messages.push(message);
     if (this.messages.length > this.maxMessages) this.messages.shift();
     this.updateRoomStats(message.room);
-    this._emit('newMessage', message);
-    if (message.meetingId) {
-      // Room-specific channel: only sockets in BOTH the org room AND the
-      // meeting room get it. (Meeting-scoped subscriptions for room filter
-      // views.) We namespace by org to prevent meeting-id collisions
-      // across orgs.
-      this.io.to(`org:${this.orgId}:room:${message.meetingId}`).emit('roomMessage', message);
-    }
+    // Batched emit (newMessageBatch every 100ms). Old per-message
+    // `newMessage` / `roomMessage` events are no longer emitted — the
+    // client subscribes to the batch event and unpacks.
+    this._queueMessageEmit(message);
 
     if (this.db && this.sessionManager?.current) {
       try {

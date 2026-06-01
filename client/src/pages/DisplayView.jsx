@@ -31,6 +31,14 @@ function DisplayViewContent({ socket }) {
       setMessages(data.messages || []);
     });
 
+    // Server ships messages as batches every 100ms (high-volume rooms).
+    // One setState per batch — keeps the presenter view smooth even
+    // when a single 100ms window has 40+ messages.
+    socket.on('newMessageBatch', (batch) => {
+      if (!Array.isArray(batch) || batch.length === 0) return;
+      setMessages(prev => [...prev, ...batch].slice(-500));
+    });
+    // Legacy single-message event — resilience for stale-server case.
     socket.on('newMessage', (message) => {
       setMessages(prev => [...prev, message].slice(-500));
     });
