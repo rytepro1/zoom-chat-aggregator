@@ -123,7 +123,7 @@ export class RecallBotManager {
    * vendor-branded default) so customers can present the bot under
    * their own identity, e.g. "Audience Q&A" or "Producer Theo".
    */
-  async connect(orgId, meetingId, passcode, roomName, roomColor = '#ef4444', botName) {
+  async connect(orgId, meetingId, passcode, roomName, roomColor = '#ef4444', botName, scheduledFor = null) {
     if (!this.isConfigured()) {
       throw new Error(
         'RecallBotManager is not configured. Set RECALL_API_KEY and PUBLIC_WEBHOOK_URL in your environment.'
@@ -135,6 +135,18 @@ export class RecallBotManager {
     if (!cleanBotName) {
       throw new Error('botName is required — operator must pick how the bot appears to meeting participants.');
     }
+
+    // Normalize scheduledFor → Date or null. Only use Recall's scheduled
+    // path if the time is more than 10 min in the future (Recall's
+    // minimum lead time per their support reply: anything sooner falls
+    // through to the adhoc pool which is what we already do today).
+    const SCHEDULE_LEAD_MS = 10 * 60 * 1000;
+    let scheduleDate = null;
+    if (scheduledFor) {
+      scheduleDate = scheduledFor instanceof Date ? scheduledFor : new Date(scheduledFor);
+      if (isNaN(scheduleDate.getTime())) scheduleDate = null;
+    }
+    const useScheduled = scheduleDate && scheduleDate.getTime() > Date.now() + SCHEDULE_LEAD_MS;
 
     if (this.botsByMeeting.has(meetingId)) {
       const existing = this.botsByMeeting.get(meetingId);
@@ -176,6 +188,13 @@ export class RecallBotManager {
         ],
       },
     };
+    // Scheduled dispatch path — bypasses Recall's shared adhoc pool
+    // (which can hit 507 adhoc_pool_depleted under load) by giving each
+    // scheduled bot a dedicated instance. Per Recall support: requires
+    // >10 min lead time; we silently fall back to adhoc otherwise.
+    if (useScheduled) {
+      body.join_at = scheduleDate.toISOString();
+    }
 
     let response;
     try {
@@ -213,6 +232,7 @@ export class RecallBotManager {
       botName: cleanBotName,
       connectedAt: new Date(),
       orgId,
+      scheduledFor: useScheduled ? scheduleDate : null,
     };
 
     this.botsByMeeting.set(meetingId, botInfo);
@@ -235,7 +255,11 @@ export class RecallBotManager {
       }
     }
 
-    console.log(`[Recall] Bot ${botId} (${orgId}) dispatched to ${meetingId} (${roomName})`);
+    if (useScheduled) {
+      console.log(`[Recall] Bot ${botId} (${orgId}) SCHEDULED for ${scheduleDate.toISOString()} → ${meetingId} (${roomName})`);
+    } else {
+      console.log(`[Recall] Bot ${botId} (${orgId}) dispatched to ${meetingId} (${roomName})`);
+    }
     return botInfo;
   }
 
@@ -314,6 +338,7 @@ export class RecallBotManager {
         roomName: info.roomName,
         roomColor: info.roomColor,
         connectedAt: info.connectedAt,
+        scheduledFor: info.scheduledFor || null,
         isMock: false,
       }));
   }

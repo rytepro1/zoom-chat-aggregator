@@ -40,11 +40,11 @@ export function RostersProvider({ children }) {
     return data.roster;
   }, []);
 
-  const createRoster = useCallback(async ({ name, entries }) => {
+  const createRoster = useCallback(async ({ name, entries, scheduledFor = null }) => {
     const res = await fetch(`${API_URL}/api/rosters`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, entries }),
+      body: JSON.stringify({ name, entries, scheduledFor }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -55,11 +55,15 @@ export function RostersProvider({ children }) {
     return data.roster;
   }, [refresh]);
 
-  const updateRoster = useCallback(async (id, { name, entries }) => {
+  const updateRoster = useCallback(async (id, { name, entries, scheduledFor }) => {
+    const body = { name, entries };
+    // Only send scheduledFor when the caller explicitly passes it
+    // (including null to clear). undefined → don't touch the field.
+    if (scheduledFor !== undefined) body.scheduledFor = scheduledFor;
     const res = await fetch(`${API_URL}/api/rosters/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, entries }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

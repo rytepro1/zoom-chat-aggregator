@@ -203,6 +203,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_org      ON messages(org_id);
 CREATE INDEX IF NOT EXISTS idx_bot_usage_org     ON bot_usage(org_id);
 CREATE INDEX IF NOT EXISTS idx_sent_messages_org ON sent_messages(org_id);
 CREATE INDEX IF NOT EXISTS idx_rosters_org       ON rosters(org_id);
+
+-- Optional "Show start time" on rosters. When set + more than 10 min in
+-- the future at deploy time, RecallBotManager passes join_at to Recall
+-- → bot is scheduled (dedicated instance, immune to adhoc_pool_depleted
+-- 507s). NULL = adhoc dispatch (current behavior).
+ALTER TABLE rosters ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
 `;
 
 // One-shot data migration: create the RYTE org and backfill org_id on

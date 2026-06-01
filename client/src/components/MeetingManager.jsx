@@ -34,6 +34,11 @@ function MeetingManager() {
   const [botName, setBotName] = useState(() => {
     try { return localStorage.getItem(BOT_NAME_STORAGE_KEY) || ''; } catch { return ''; }
   });
+  // Optional show-start time. When set + >10 min away, the server tells
+  // Recall to schedule the bot (dedicated instance, immune to 507s).
+  // Stored as a datetime-local string (local time, no timezone) — the
+  // browser converts to UTC ISO before sending. Empty = adhoc dispatch.
+  const [scheduledFor, setScheduledFor] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState('');
 
@@ -55,12 +60,18 @@ function MeetingManager() {
     setIsConnecting(true);
 
     try {
+      // datetime-local is local time without timezone — JS Date converts
+      // to UTC via toISOString(). Empty stays empty → server treats as
+      // adhoc dispatch.
+      const scheduledIso = scheduledFor ? new Date(scheduledFor).toISOString() : null;
+
       await connectToMeeting({
         meetingId: meetingId.trim().replace(/\s/g, ''),
         passcode: passcode.trim(),
         roomName: roomName.trim() || `Meeting ${meetingId}`,
         roomColor: roomColor,
         botName: botName.trim(),
+        scheduledFor: scheduledIso,
       });
 
       // Remember this bot name for next session so the operator doesn't
@@ -71,6 +82,7 @@ function MeetingManager() {
       setMeetingId('');
       setPasscode('');
       setRoomName('');
+      setScheduledFor('');
       // Rotate to next color for convenience
       const currentIndex = ROOM_COLORS.findIndex(c => c.value === roomColor);
       setRoomColor(ROOM_COLORS[(currentIndex + 1) % ROOM_COLORS.length].value);
@@ -80,6 +92,19 @@ function MeetingManager() {
       setIsConnecting(false);
     }
   };
+
+  // Quick read of whether the entered time will actually schedule
+  // (>10 min in future) vs fall through to adhoc dispatch.
+  const scheduleHint = (() => {
+    if (!scheduledFor) return null;
+    const t = new Date(scheduledFor).getTime();
+    if (isNaN(t)) return null;
+    const leadMin = (t - Date.now()) / 60000;
+    if (leadMin > 10) {
+      return { ok: true, text: `Bot scheduled — will join at ${new Date(scheduledFor).toLocaleString()}` };
+    }
+    return { ok: false, text: 'Less than 10 min away — will dispatch immediately (adhoc). Set a time >10 min ahead to use Recall\'s scheduled-bot pool.' };
+  })();
 
   const handleDisconnect = async (id) => {
     try {
@@ -157,6 +182,28 @@ function MeetingManager() {
           <p className="text-xs opacity-50 mt-1">
             How the bot appears to meeting participants. Saved for next time.
           </p>
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1 opacity-70">
+            Show start time <span className="opacity-60">(optional)</span>
+          </label>
+          <input
+            type="datetime-local"
+            value={scheduledFor}
+            onChange={(e) => setScheduledFor(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none transition-colors"
+            style={{ color: 'var(--text-color)', colorScheme: 'dark' }}
+          />
+          {scheduleHint ? (
+            <p className={`text-xs mt-1 ${scheduleHint.ok ? 'text-green-400' : 'text-amber-400'}`}>
+              {scheduleHint.text}
+            </p>
+          ) : (
+            <p className="text-xs opacity-50 mt-1">
+              Set if your show starts &gt;10 min from now — Recall reserves a dedicated bot so you avoid &ldquo;adhoc pool depleted&rdquo; errors.
+            </p>
+          )}
         </div>
 
         <div>
@@ -261,12 +308,17 @@ function MeetingManager() {
                       className={`w-2 h-2 rounded-full ${
                         meeting.status === 'connected'
                           ? 'bg-green-400'
+                          : meeting.status === 'scheduled'
+                          ? 'bg-blue-400'
                           : meeting.status === 'connecting'
                           ? 'bg-yellow-400 animate-pulse'
                           : 'bg-red-400'
                       }`}
+                      title={meeting.scheduledFor ? `Scheduled for ${new Date(meeting.scheduledFor).toLocaleString()}` : undefined}
                     />
-                    {meeting.status}
+                    {meeting.status === 'scheduled' && meeting.scheduledFor
+                      ? `scheduled for ${new Date(meeting.scheduledFor).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                      : meeting.status}
                   </span>
                   <button
                     onClick={() => handleDisconnect(meeting.id)}

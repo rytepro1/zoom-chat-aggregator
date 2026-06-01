@@ -155,7 +155,8 @@ app.get('/api/meetings', async (req, res) => {
       id: conn.meetingId,
       meetingId: conn.meetingId,
       roomName: conn.roomName,
-      status: 'connected',
+      status: conn.scheduledFor ? 'scheduled' : 'connected',
+      scheduledFor: conn.scheduledFor || null,
       isMock: conn.isMock,
       connectedAt: conn.connectedAt,
     })),
@@ -163,7 +164,7 @@ app.get('/api/meetings', async (req, res) => {
 });
 
 app.post('/api/meetings/connect', async (req, res) => {
-  const { meetingId, passcode, roomName, roomColor, botName } = req.body;
+  const { meetingId, passcode, roomName, roomColor, botName, scheduledFor } = req.body;
   if (!meetingId) return res.status(400).json({ error: 'Meeting ID is required' });
   if (useRecall && (!botName || !String(botName).trim())) {
     return res.status(400).json({
@@ -191,7 +192,7 @@ app.post('/api/meetings/connect', async (req, res) => {
       // route inbound webhooks to the right org's MA.
       recallBotManager.orgState = orgState;
       recallBotManager.db = app.get('db');
-      await recallBotManager.connect(req.org.id, cleanMeetingId, passcode, finalRoomName, finalRoomColor, botName);
+      await recallBotManager.connect(req.org.id, cleanMeetingId, passcode, finalRoomName, finalRoomColor, botName, scheduledFor || null);
     } else {
       await rtmsManager.connect(cleanMeetingId, null, finalRoomName, finalRoomColor);
     }
@@ -450,10 +451,10 @@ app.post('/api/rosters', async (req, res) => {
   if (!rosterManager.isAvailable()) {
     return res.status(503).json({ error: 'Roster storage requires the database.' });
   }
-  const { name, entries = [] } = req.body || {};
+  const { name, entries = [], scheduledFor = null } = req.body || {};
   try {
     rosterManager.validateEntries(entries);
-    const roster = await rosterManager.create(req.org.id, { name, entries });
+    const roster = await rosterManager.create(req.org.id, { name, entries, scheduledFor });
     res.status(201).json({ roster });
   } catch (err) {
     console.error('POST /api/rosters failed:', err);
@@ -466,10 +467,10 @@ app.patch('/api/rosters/:id', async (req, res) => {
   if (!rosterManager.isAvailable()) {
     return res.status(503).json({ error: 'Roster storage requires the database.' });
   }
-  const { name, entries } = req.body || {};
+  const { name, entries, scheduledFor } = req.body || {};
   try {
     if (Array.isArray(entries)) rosterManager.validateEntries(entries);
-    const roster = await rosterManager.update(req.org.id, req.params.id, { name, entries });
+    const roster = await rosterManager.update(req.org.id, req.params.id, { name, entries, scheduledFor });
     if (!roster) return res.status(404).json({ error: 'Roster not found' });
     res.json({ roster });
   } catch (err) {
@@ -534,7 +535,8 @@ app.post('/api/rosters/:id/deploy', async (req, res) => {
           entry.passcode,
           entry.room_name,
           entry.room_color,
-          entry.bot_name
+          entry.bot_name,
+          roster.scheduled_for || null,
         );
         ma.addRoom({
           id: entry.meeting_id,

@@ -39,6 +39,8 @@ function RostersPanel() {
   const [editingId, setEditingId] = useState(null);
   const [draftName, setDraftName] = useState('');
   const [draftEntries, setDraftEntries] = useState([emptyEntry()]);
+  // datetime-local input value (local time, no timezone). Empty = adhoc.
+  const [draftScheduled, setDraftScheduled] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deployingId, setDeployingId] = useState(null);
@@ -48,6 +50,7 @@ function RostersPanel() {
     setEditingId(null);
     setDraftName('');
     setDraftEntries([emptyEntry()]);
+    setDraftScheduled('');
     setError('');
     setEditorOpen(true);
   };
@@ -59,6 +62,7 @@ function RostersPanel() {
       setEditingId(rosterId);
       setDraftName(full.name);
       setDraftEntries(full.entries.length ? full.entries : [emptyEntry()]);
+      setDraftScheduled(toDatetimeLocal(full.scheduled_for));
       setEditorOpen(true);
     } catch (err) {
       setError(err.message);
@@ -70,6 +74,7 @@ function RostersPanel() {
     setEditingId(null);
     setDraftName('');
     setDraftEntries([emptyEntry()]);
+    setDraftScheduled('');
     setError('');
   };
 
@@ -77,10 +82,11 @@ function RostersPanel() {
     setSaving(true);
     setError('');
     try {
+      const scheduledIso = draftScheduled ? new Date(draftScheduled).toISOString() : null;
       if (editingId) {
-        await updateRoster(editingId, { name: draftName, entries: draftEntries });
+        await updateRoster(editingId, { name: draftName, entries: draftEntries, scheduledFor: scheduledIso });
       } else {
-        await createRoster({ name: draftName, entries: draftEntries });
+        await createRoster({ name: draftName, entries: draftEntries, scheduledFor: scheduledIso });
       }
       cancelEdit();
     } catch (err) {
@@ -89,6 +95,18 @@ function RostersPanel() {
       setSaving(false);
     }
   };
+
+  // Compute the schedule-hint for the editor: ok if >10 min ahead, warning otherwise.
+  const draftScheduleHint = (() => {
+    if (!draftScheduled) return null;
+    const t = new Date(draftScheduled).getTime();
+    if (isNaN(t)) return null;
+    const leadMin = (t - Date.now()) / 60000;
+    if (leadMin > 10) {
+      return { ok: true, text: `All bots scheduled — they'll join at ${new Date(draftScheduled).toLocaleString()}` };
+    }
+    return { ok: false, text: 'Less than 10 min away — bots will dispatch immediately (adhoc, risks 507s). Set >10 min ahead to use scheduled bots.' };
+  })();
 
   const handleDeploy = async (rosterId) => {
     setDeployingId(rosterId);
@@ -190,6 +208,28 @@ function RostersPanel() {
             />
           </div>
 
+          <div>
+            <label className="block text-sm mb-1 opacity-70">
+              Show start time <span className="opacity-60">(optional)</span>
+            </label>
+            <input
+              type="datetime-local"
+              value={draftScheduled}
+              onChange={(e) => setDraftScheduled(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none"
+              style={{ color: 'var(--text-color)', colorScheme: 'dark' }}
+            />
+            {draftScheduleHint ? (
+              <p className={`text-xs mt-1 ${draftScheduleHint.ok ? 'text-green-400' : 'text-amber-400'}`}>
+                {draftScheduleHint.text}
+              </p>
+            ) : (
+              <p className="text-xs opacity-50 mt-1">
+                When set + &gt;10 min away, deploys schedule a dedicated bot for each meeting (no 507 errors). Leave blank for adhoc.
+              </p>
+            )}
+          </div>
+
           <div className="space-y-3">
             {draftEntries.map((entry, idx) => (
               <EntryEditor
@@ -236,6 +276,11 @@ function RostersPanel() {
 }
 
 function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete }) {
+  const scheduled = roster.scheduled_for ? new Date(roster.scheduled_for) : null;
+  const scheduledLabel = scheduled
+    ? scheduled.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+    : null;
+
   return (
     <div className="p-3 rounded-lg bg-white/5 border border-white/10">
       <div className="flex items-center justify-between mb-2">
@@ -245,6 +290,11 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete }) {
           </div>
           <div className="text-xs opacity-50">
             {roster.entry_count} {roster.entry_count === 1 ? 'meeting' : 'meetings'}
+            {scheduledLabel && (
+              <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-300 text-[10px]">
+                ⏰ {scheduledLabel}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex gap-1.5 flex-shrink-0">
@@ -369,6 +419,24 @@ function EntryEditor({ index, entry, canRemove, onChange, onRemove }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Convert a server timestamp (ISO string) → datetime-local input value.
+ * datetime-local wants "YYYY-MM-DDTHH:MM" in *local* time, no timezone.
+ */
+function toDatetimeLocal(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    d.getFullYear() + '-' +
+    pad(d.getMonth() + 1) + '-' +
+    pad(d.getDate()) + 'T' +
+    pad(d.getHours()) + ':' +
+    pad(d.getMinutes())
   );
 }
 

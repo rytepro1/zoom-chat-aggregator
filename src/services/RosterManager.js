@@ -24,7 +24,7 @@ export class RosterManager {
     if (!this.db) return [];
     if (!orgId) throw new Error('orgId required');
     const { rows } = await this.db.query(
-      `SELECT r.id, r.name, r.created_at, r.updated_at,
+      `SELECT r.id, r.name, r.scheduled_for, r.created_at, r.updated_at,
               COUNT(e.id)::int AS entry_count
          FROM rosters r
     LEFT JOIN roster_entries e ON e.roster_id = r.id
@@ -40,7 +40,7 @@ export class RosterManager {
     if (!this.db) return null;
     if (!orgId) throw new Error('orgId required');
     const rosterRes = await this.db.query(
-      `SELECT id, name, created_at, updated_at
+      `SELECT id, name, scheduled_for, created_at, updated_at
          FROM rosters
         WHERE id = $1 AND org_id = $2`,
       [id, orgId]
@@ -58,43 +58,48 @@ export class RosterManager {
     return roster;
   }
 
-  async create(orgId, { name, entries = [] }) {
+  async create(orgId, { name, entries = [], scheduledFor = null }) {
     if (!this.db) throw new Error('Persistence is not configured');
     if (!orgId) throw new Error('orgId required');
     const trimmedName = String(name || '').trim();
     if (!trimmedName) throw new Error('Roster name is required');
+    const schedTs = normalizeScheduled(scheduledFor);
 
     const id = randomUUID();
     await this.db.query(
-      `INSERT INTO rosters (id, name, org_id, tenant_id)
-       VALUES ($1, $2, $3, COALESCE($3, 'ryteproductions'))`,
-      [id, trimmedName, orgId]
+      `INSERT INTO rosters (id, name, scheduled_for, org_id, tenant_id)
+       VALUES ($1, $2, $3, $4, COALESCE($4, 'ryteproductions'))`,
+      [id, trimmedName, schedTs, orgId]
     );
     if (entries.length > 0) await this._insertEntries(id, entries);
     return this.get(orgId, id);
   }
 
-  async update(orgId, id, { name, entries }) {
+  async update(orgId, id, { name, entries, scheduledFor }) {
     if (!this.db) throw new Error('Persistence is not configured');
     if (!orgId) throw new Error('orgId required');
     const existing = await this.get(orgId, id);
     if (!existing) return null;
 
+    // Build the SET clause dynamically so callers can update any
+    // subset of fields without nulling the others.
+    const sets = ['updated_at = NOW()'];
+    const params = [id, orgId];
     if (typeof name === 'string') {
       const trimmed = name.trim();
       if (!trimmed) throw new Error('Roster name cannot be empty');
-      await this.db.query(
-        `UPDATE rosters SET name = $2, updated_at = NOW()
-          WHERE id = $1 AND org_id = $3`,
-        [id, trimmed, orgId]
-      );
-    } else {
-      await this.db.query(
-        `UPDATE rosters SET updated_at = NOW()
-          WHERE id = $1 AND org_id = $2`,
-        [id, orgId]
-      );
+      params.push(trimmed);
+      sets.push(`name = $${params.length}`);
     }
+    if (scheduledFor !== undefined) {
+      // null / empty string → clear; otherwise normalize to a Date
+      params.push(normalizeScheduled(scheduledFor));
+      sets.push(`scheduled_for = $${params.length}`);
+    }
+    await this.db.query(
+      `UPDATE rosters SET ${sets.join(', ')} WHERE id = $1 AND org_id = $2`,
+      params
+    );
 
     if (Array.isArray(entries)) {
       await this.db.query(`DELETE FROM roster_entries WHERE roster_id = $1`, [id]);
@@ -146,4 +151,19 @@ export class RosterManager {
       );
     }
   }
+}
+
+/**
+ * Normalize a scheduled-for value (string | Date | null | empty) to either
+ * a Date for the DB or null for "no schedule". Empty strings collapse to
+ * null so the UI clearing the field clears the schedule.
+ */
+function normalizeScheduled(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) {
+    throw new Error('scheduled_for must be a valid date');
+  }
+  return d;
 }
