@@ -1,6 +1,52 @@
 import { randomUUID } from 'node:crypto';
 
 /**
+ * Follow redirects via HEAD to expand a shortener (joinevent.link,
+ * etc.) into a direct Zoom URL. Recall's API only accepts native Zoom
+ * URLs as meeting_url. Returns the resolved URL or the original on
+ * any failure — we'd rather pass through and let Recall reject than
+ * lose the operator's input.
+ *
+ * Uses HEAD specifically because Zoom registration tokens can be
+ * single-use; a HEAD probe is less likely than a GET / browser
+ * navigation to be counted as "the registrant joined." Tight 5s
+ * timeout, max 10 redirects.
+ */
+async function resolveShortenedUrl(url) {
+  if (!url || typeof url !== 'string') return url;
+  // Already a direct Zoom URL? Skip the network round-trip.
+  try {
+    const parsed = new URL(url);
+    if (/(^|\.)zoom\.us$|(^|\.)zoom\.com$|(^|\.)zoomgov\.com$/i.test(parsed.hostname)) {
+      return url;
+    }
+  } catch {
+    return url; // malformed URL — let Recall surface the error
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+      // Some shorteners look at user-agent before redirecting.
+      headers: { 'User-Agent': 'ZoomChat/1.0' },
+    });
+    const finalUrl = res.url || url;
+    if (finalUrl !== url) {
+      console.log(`[Recall] resolved shortener ${url.slice(0, 60)}… → ${finalUrl.split('?')[0]}?…`);
+    }
+    return finalUrl;
+  } catch (err) {
+    console.warn(`[Recall] failed to resolve ${url.slice(0, 60)}…: ${err.message} — passing through`);
+    return url;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * RecallBotManager — Path A from docs/CHAT-CAPTURE-ARCHITECTURE.md.
  *
  * Mirrors RTMSManager's public surface (connect / disconnect /
@@ -167,6 +213,13 @@ export class RecallBotManager {
     let meetingUrl;
     if (customJoinUrl && String(customJoinUrl).trim()) {
       meetingUrl = String(customJoinUrl).trim();
+      // Many Zoom invites come as shortener URLs (joinevent.link,
+      // zoom-event style links). Recall only accepts direct Zoom
+      // URLs, so we follow redirects server-side and hand the
+      // resolved URL to Recall. A HEAD request is also less likely
+      // to spend a single-use registration token than a browser
+      // click (no JS, no "you're joining" page render).
+      meetingUrl = await resolveShortenedUrl(meetingUrl);
     } else {
       meetingUrl = `https://zoom.us/j/${meetingId}`;
       if (passcode && String(passcode).trim()) {
