@@ -48,7 +48,7 @@ export class RosterManager {
     if (rosterRes.rows.length === 0) return null;
     const roster = rosterRes.rows[0];
     const entriesRes = await this.db.query(
-      `SELECT id, meeting_id, passcode, room_name, room_color, bot_name, display_order
+      `SELECT id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, display_order
          FROM roster_entries
         WHERE roster_id = $1
         ORDER BY display_order ASC, id ASC`,
@@ -136,8 +136,8 @@ export class RosterManager {
       const e = entries[i];
       await this.db.query(
         `INSERT INTO roster_entries
-           (id, roster_id, meeting_id, passcode, room_name, room_color, bot_name, display_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+           (id, roster_id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, display_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           randomUUID(),
           rosterId,
@@ -146,6 +146,7 @@ export class RosterManager {
           String(e.room_name).trim(),
           e.room_color || '#ef4444',
           String(e.bot_name).trim(),
+          (e.meeting_url && String(e.meeting_url).trim()) || null,
           typeof e.display_order === 'number' ? e.display_order : i,
         ]
       );

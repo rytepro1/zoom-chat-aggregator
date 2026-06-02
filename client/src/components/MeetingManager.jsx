@@ -39,6 +39,11 @@ function MeetingManager() {
   // Stored as a datetime-local string (local time, no timezone) — the
   // browser converts to UTC ISO before sending. Empty = adhoc dispatch.
   const [scheduledFor, setScheduledFor] = useState('');
+  // Optional pre-registered join URL for Zoom meetings that require
+  // registration. Host registers the bot as an attendee, Zoom emails
+  // back a URL with ?tk=<token>, operator pastes it here. When set,
+  // the bot joins via that URL (passes Zoom's registration gate).
+  const [meetingUrl, setMeetingUrl] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState('');
 
@@ -72,6 +77,7 @@ function MeetingManager() {
         roomColor: roomColor,
         botName: botName.trim(),
         scheduledFor: scheduledIso,
+        meetingUrl: meetingUrl.trim() || null,
       });
 
       // Remember this bot name for next session so the operator doesn't
@@ -83,6 +89,7 @@ function MeetingManager() {
       setPasscode('');
       setRoomName('');
       setScheduledFor('');
+      setMeetingUrl('');
       // Rotate to next color for convenience
       const currentIndex = ROOM_COLORS.findIndex(c => c.value === roomColor);
       setRoomColor(ROOM_COLORS[(currentIndex + 1) % ROOM_COLORS.length].value);
@@ -151,6 +158,23 @@ function MeetingManager() {
             className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none transition-colors"
             style={{ color: 'var(--text-color)' }}
           />
+        </div>
+
+        <div>
+          <label className="block text-sm mb-1 opacity-70">
+            Registration URL <span className="opacity-60">(only for registration-required Zoom meetings)</span>
+          </label>
+          <input
+            type="text"
+            value={meetingUrl}
+            onChange={(e) => setMeetingUrl(e.target.value)}
+            placeholder="https://us02web.zoom.us/w/...?tk=...&pwd=..."
+            className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none transition-colors text-xs"
+            style={{ color: 'var(--text-color)' }}
+          />
+          <p className="text-xs opacity-50 mt-1">
+            Host registers the bot as an attendee in Zoom → email contains a unique join URL → paste here. Bot joins via the registration-authenticated link instead of the public meeting URL.
+          </p>
         </div>
 
         <div>

@@ -123,7 +123,7 @@ export class RecallBotManager {
    * vendor-branded default) so customers can present the bot under
    * their own identity, e.g. "Audience Q&A" or "Producer Theo".
    */
-  async connect(orgId, meetingId, passcode, roomName, roomColor = '#ef4444', botName, scheduledFor = null) {
+  async connect(orgId, meetingId, passcode, roomName, roomColor = '#ef4444', botName, scheduledFor = null, customJoinUrl = null) {
     if (!this.isConfigured()) {
       throw new Error(
         'RecallBotManager is not configured. Set RECALL_API_KEY and PUBLIC_WEBHOOK_URL in your environment.'
@@ -160,10 +160,18 @@ export class RecallBotManager {
       return existing;
     }
 
-    // Build the Zoom URL the way Recall expects (plain join link with pwd query string).
-    let meetingUrl = `https://zoom.us/j/${meetingId}`;
-    if (passcode && String(passcode).trim()) {
-      meetingUrl += `?pwd=${encodeURIComponent(String(passcode).trim())}`;
+    // Prefer the operator-supplied registration URL when provided
+    // (registration-required Zoom meetings — operator pastes the
+    // tokenized URL Zoom emails after registering the bot as an
+    // attendee). Otherwise build the standard public join link.
+    let meetingUrl;
+    if (customJoinUrl && String(customJoinUrl).trim()) {
+      meetingUrl = String(customJoinUrl).trim();
+    } else {
+      meetingUrl = `https://zoom.us/j/${meetingId}`;
+      if (passcode && String(passcode).trim()) {
+        meetingUrl += `?pwd=${encodeURIComponent(String(passcode).trim())}`;
+      }
     }
 
     const chatWebhookUrl = `${this.publicWebhookUrl}/webhook/recall/chat`;

@@ -209,6 +209,14 @@ CREATE INDEX IF NOT EXISTS idx_rosters_org       ON rosters(org_id);
 -- → bot is scheduled (dedicated instance, immune to adhoc_pool_depleted
 -- 507s). NULL = adhoc dispatch (current behavior).
 ALTER TABLE rosters ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
+
+-- Optional pre-registered join URL on a roster entry — used for Zoom
+-- meetings that require registration. The host registers the bot as an
+-- attendee, Zoom emails back a unique URL with ?tk=<registrant-token>,
+-- operator pastes the URL here. When set, the server hands it straight
+-- to Recall as the meeting_url (bypassing the meeting_id + passcode
+-- assembly path). NULL = use meeting_id + passcode as today.
+ALTER TABLE roster_entries ADD COLUMN IF NOT EXISTS meeting_url TEXT;
 `;
 
 // One-shot data migration: create the RYTE org and backfill org_id on

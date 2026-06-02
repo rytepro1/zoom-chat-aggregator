@@ -385,6 +385,15 @@ function EntryEditor({ index, entry, canRemove, onChange, onRemove }) {
       />
       <input
         type="text"
+        value={entry.meeting_url || ''}
+        onChange={(e) => onChange({ meeting_url: e.target.value })}
+        placeholder="Registration URL (only if Zoom registration required)"
+        className="w-full px-2 py-1.5 text-xs rounded bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none font-mono"
+        style={{ color: 'var(--text-color)' }}
+        title="For meetings that require registration: paste the unique join URL Zoom emails after registering the bot as an attendee (contains ?tk=...)"
+      />
+      <input
+        type="text"
         value={entry.room_name}
         onChange={(e) => onChange({ room_name: e.target.value })}
         placeholder="Room display name (e.g. Main Stage)"

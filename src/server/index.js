@@ -164,7 +164,7 @@ app.get('/api/meetings', async (req, res) => {
 });
 
 app.post('/api/meetings/connect', async (req, res) => {
-  const { meetingId, passcode, roomName, roomColor, botName, scheduledFor } = req.body;
+  const { meetingId, passcode, roomName, roomColor, botName, scheduledFor, meetingUrl } = req.body;
   if (!meetingId) return res.status(400).json({ error: 'Meeting ID is required' });
   if (useRecall && (!botName || !String(botName).trim())) {
     return res.status(400).json({
@@ -192,7 +192,7 @@ app.post('/api/meetings/connect', async (req, res) => {
       // route inbound webhooks to the right org's MA.
       recallBotManager.orgState = orgState;
       recallBotManager.db = app.get('db');
-      await recallBotManager.connect(req.org.id, cleanMeetingId, passcode, finalRoomName, finalRoomColor, botName, scheduledFor || null);
+      await recallBotManager.connect(req.org.id, cleanMeetingId, passcode, finalRoomName, finalRoomColor, botName, scheduledFor || null, meetingUrl || null);
     } else {
       await rtmsManager.connect(cleanMeetingId, null, finalRoomName, finalRoomColor);
     }
@@ -537,6 +537,7 @@ app.post('/api/rosters/:id/deploy', async (req, res) => {
           entry.room_color,
           entry.bot_name,
           roster.scheduled_for || null,
+          entry.meeting_url || null,
         );
         ma.addRoom({
           id: entry.meeting_id,
