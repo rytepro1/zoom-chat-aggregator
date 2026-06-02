@@ -1,5 +1,6 @@
 import React from 'react';
 import { useModeration } from '../contexts/ModerationContext';
+import PresenterNoteComposer from './PresenterNoteComposer';
 
 function ModerationPanel() {
   const {
@@ -32,6 +33,9 @@ function ModerationPanel() {
       >
         Moderation Queue
       </h2>
+
+      {/* Note to presenter — org-wide, presenter pop-out only */}
+      <PresenterNoteComposer />
 
       {/* Currently Featured */}
       <div className="mb-4">

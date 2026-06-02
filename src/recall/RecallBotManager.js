@@ -247,6 +247,20 @@ export class RecallBotManager {
             events: ['participant_events.chat_message'],
           },
         ],
+        // Start recording the instant the bot enters the call so we
+        // capture pre-show chat. Default is `participant_join` which
+        // delays recording until somebody else is in the meeting.
+        start_recording_on: 'call_join',
+      },
+      // Production events run for hours and have natural quiet windows
+      // (panelist breaks, between sessions). Recall's defaults are
+      // way too aggressive — `everyone_left_timeout` is 2 seconds, so
+      // a panelist stepping off camera briefly kills the bot. Bump
+      // everything to 4 hours so the bot rides through quiet periods.
+      automatic_leave: {
+        everyone_left_timeout: 14400,
+        noone_joined_timeout: 14400,
+        waiting_room_timeout: 14400,
       },
     };
     // Scheduled dispatch path — bypasses Recall's shared adhoc pool

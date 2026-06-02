@@ -10,6 +10,7 @@ import webhookRoutes from '../routes/webhook.js';
 import authRouter from '../routes/auth.js';
 import billingRouter from '../routes/billing.js';
 import invitationsRouter from '../routes/invitations.js';
+import presenterNotesRouter from '../routes/presenterNotes.js';
 import { StripeService } from '../services/StripeService.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { RosterManager } from '../services/RosterManager.js';
@@ -138,6 +139,10 @@ app.use('/api/invitations', invitationsRouter());
 // `await orgState.get(req.org.id)`.
 
 app.use('/api', requireAuth);
+
+// Presenter notes — mounted under /api so requireAuth applies above.
+// Any signed-in role can send/dismiss; org isolation via req.org.id.
+app.use('/api/presenter-notes', presenterNotesRouter());
 
 // Helper to grab the requesting user's org state on demand.
 async function org(req) {

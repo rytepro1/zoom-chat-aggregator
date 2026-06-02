@@ -134,6 +134,19 @@ function SettingsPanel() {
               ]}
               onChange={(v) => updateSetting('displayScale', Number(v))}
             />
+            <SelectOption
+              label="Production note auto-clear"
+              value={String(settings.presenterNoteAutoDismissSeconds ?? 60)}
+              options={[
+                { value: '15',  label: '15 seconds' },
+                { value: '30',  label: '30 seconds' },
+                { value: '60',  label: '1 minute (default)' },
+                { value: '120', label: '2 minutes' },
+                { value: '300', label: '5 minutes' },
+                { value: '0',   label: 'Manual clear only' },
+              ]}
+              onChange={(v) => updateSetting('presenterNoteAutoDismissSeconds', Number(v))}
+            />
           </Section>
 
           {/* Display Options */}

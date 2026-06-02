@@ -217,6 +217,27 @@ ALTER TABLE rosters ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
 -- to Recall as the meeting_url (bypassing the meeting_id + passcode
 -- assembly path). NULL = use meeting_id + passcode as today.
 ALTER TABLE roster_entries ADD COLUMN IF NOT EXISTS meeting_url TEXT;
+
+-- Presenter notes — short messages moderators compose and push onto the
+-- presenter pop-out view only (NOT the moderator chat feed, NOT into
+-- Zoom rooms). Each note is org-scoped and ephemeral; the
+-- dismissed_at filter + sent_at-based expiry handle visibility.
+-- production_note_dismiss_seconds is per-org configurable; NULL means
+-- "manual clear only" (no auto-expire).
+CREATE TABLE IF NOT EXISTS presenter_notes (
+  id              TEXT PRIMARY KEY,
+  org_id          TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  sender_user_id  TEXT REFERENCES users(id) ON DELETE SET NULL,
+  sender_display  TEXT,
+  body            TEXT NOT NULL,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  dismissed_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_presenter_notes_active
+  ON presenter_notes(org_id, sent_at) WHERE dismissed_at IS NULL;
+
+ALTER TABLE organizations
+  ADD COLUMN IF NOT EXISTS production_note_dismiss_seconds INTEGER DEFAULT 60;
 `;
 
 // One-shot data migration: create the RYTE org and backfill org_id on

@@ -38,6 +38,10 @@ const defaultSettings = {
   // card exports. Empty = no footer (the current default).
   brandMark: '',
 
+  // Production-note auto-dismiss (presenter pop-out only). Seconds.
+  // 0 = manual clear only — note stays on screen until cleared.
+  presenterNoteAutoDismissSeconds: 60,
+
   // Behavior
   autoScroll: true,
   soundEnabled: false,

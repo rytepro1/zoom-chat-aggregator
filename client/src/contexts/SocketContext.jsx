@@ -5,6 +5,7 @@ import { ModerationProvider } from './ModerationContext';
 import { SavedProvider } from './SavedContext';
 import { SessionProvider } from './SessionContext';
 import { RostersProvider } from './RostersContext';
+import { PresenterNotesProvider } from './PresenterNotesContext';
 
 const SocketContext = createContext(null);
 
@@ -161,7 +162,9 @@ export function SocketProvider({ children }) {
           <ModerationProvider socket={socket}>
             <SavedProvider socket={socket}>
               <RostersProvider>
-                {children}
+                <PresenterNotesProvider socket={socket}>
+                  {children}
+                </PresenterNotesProvider>
               </RostersProvider>
             </SavedProvider>
           </ModerationProvider>

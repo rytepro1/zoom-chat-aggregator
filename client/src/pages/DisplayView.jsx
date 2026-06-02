@@ -3,6 +3,8 @@ import { io } from 'socket.io-client';
 import ChatMessage from '../components/ChatMessage';
 import { SettingsProvider, useSettings } from '../contexts/SettingsContext';
 import { ModerationProvider, useModeration } from '../contexts/ModerationContext';
+import { PresenterNotesProvider, usePresenterNotes } from '../contexts/PresenterNotesContext';
+import PresenterNotesOverlay, { getPresenterNotesHeight } from '../components/PresenterNotesOverlay';
 
 const SOCKET_URL = import.meta.env.DEV
   ? 'http://localhost:3001'
@@ -20,6 +22,8 @@ function DisplayViewContent({ socket }) {
   const scrollIntervalRef = useRef(null);
   const { settings } = useSettings();
   const { featuredMessage } = useModeration();
+  const { notes: presenterNotes } = usePresenterNotes();
+  const notesHeight = getPresenterNotesHeight(presenterNotes.length);
 
   useEffect(() => {
     if (!socket) return;
@@ -114,13 +118,18 @@ function DisplayViewContent({ socket }) {
       }}
       onMouseMove={handleMouseMove}
     >
+      {/* Presenter notes (production team → on-air talent) — sit ABOVE
+          the featured chat bubble and bump everything else down. */}
+      <PresenterNotesOverlay />
+
       {/* Featured Message - Floating at top.
           Background: near-solid dark with a hint of the room color so
           the chat feed behind it can't bleed through. Border picks up
           the room color at high opacity to keep the visual association.
-          Body text is pure white for max contrast over the dark fill. */}
+          Body text is pure white for max contrast over the dark fill.
+          `top` shifts down when presenter notes are visible. */}
       {featuredMessage && (
-        <div className="fixed top-0 left-0 right-0 z-50 p-6">
+        <div className="fixed left-0 right-0 z-50 p-6" style={{ top: `${notesHeight}px` }}>
           <div
             className="max-w-5xl mx-auto p-8 rounded-2xl shadow-2xl border-2"
             style={{
@@ -173,12 +182,12 @@ function DisplayViewContent({ socket }) {
         </div>
       )}
 
-      {/* Full-screen chat feed */}
+      {/* Full-screen chat feed — padded down past notes + featured. */}
       <div
         ref={containerRef}
         className="h-full w-full overflow-y-auto px-8 py-6"
         style={{
-          paddingTop: featuredMessage ? '200px' : '24px'
+          paddingTop: `${notesHeight + (featuredMessage ? 200 : 24)}px`,
         }}
       >
         {messages.length === 0 ? (
@@ -247,7 +256,9 @@ function DisplayView() {
   return (
     <SettingsProvider>
       <ModerationProvider socket={socket}>
-        <DisplayViewContent socket={socket} />
+        <PresenterNotesProvider socket={socket}>
+          <DisplayViewContent socket={socket} />
+        </PresenterNotesProvider>
       </ModerationProvider>
     </SettingsProvider>
   );

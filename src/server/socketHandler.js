@@ -1,5 +1,6 @@
 import cookie from 'cookie';
 import { COOKIE_NAME, validateSession } from '../auth/sessions.js';
+import { loadActiveNotes } from '../routes/presenterNotes.js';
 
 /**
  * Socket.io setup: auth gate + per-org room subscription + moderation
@@ -70,6 +71,13 @@ export function setupSocketHandlers(io, { db, orgState }) {
       rooms: ma.getRooms(),
       stats: ma.getStats(),
     });
+
+    // Push currently-active presenter notes so a fresh connect /
+    // page reload doesn't lose them. Failure is logged but doesn't
+    // block initial state delivery.
+    loadActiveNotes(db, orgId)
+      .then(payload => socket.emit('presenterNotesInitial', payload))
+      .catch(err => console.error('[socket] loadActiveNotes failed:', err.message));
 
     socket.on('getHistory', (options = {}) => {
       const { limit = 100, room = null } = options;
