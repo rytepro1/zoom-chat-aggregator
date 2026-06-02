@@ -178,8 +178,10 @@ export class TrialEnforcer {
    * client into the upgrade flow.
    */
   async checkCanDispatch(org) {
-    // Admin and paid tiers always pass.
-    if (org.planTier === 'admin' || org.planTier === 'solo') {
+    // Admin and all paid tiers (solo / pro / studio) bypass trial
+    // minute-counting — they only care about concurrent-bot caps.
+    const PAID_TIERS = new Set(['admin', 'solo', 'pro', 'studio']);
+    if (PAID_TIERS.has(org.planTier)) {
       const activeBots = this.recallBotManager.getActiveConnections(org.id).length;
       if (activeBots >= org.concurrentBotLimit) {
         return {
@@ -191,7 +193,7 @@ export class TrialEnforcer {
       return { allowed: true };
     }
 
-    // Trial: check both concurrent cap AND minutes-remaining.
+    // Trial / canceled / anything else: check both concurrent cap AND minutes-remaining.
     const activeBots = this.recallBotManager.getActiveConnections(org.id).length;
     if (activeBots >= org.concurrentBotLimit) {
       return {
