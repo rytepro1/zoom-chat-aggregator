@@ -36,6 +36,23 @@ export function AuthProvider({ children }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Re-fetch /me when the tab regains focus. Catches the common
+  // "operator A upgraded the org in another browser, operator B's
+  // tab still shows trial-exhausted modal" stale-state case without
+  // requiring a manual refresh.
+  useEffect(() => {
+    const onFocus = () => { refresh(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refresh();
+    });
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      // visibilitychange's anonymous handler can't easily be removed;
+      // unmounting AuthProvider is also app-lifetime so this is fine.
+    };
+  }, [refresh]);
+
   const signup = useCallback(async ({ email, password, orgName }) => {
     setError(null);
     const res = await fetch('/api/auth/signup', {

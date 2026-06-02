@@ -14,7 +14,11 @@ import { useSocketContext } from '../contexts/SocketContext';
 export default function TrialExhaustedModal() {
   const { org } = useAuth();
   const { trialState } = useSocketContext();
-  if (!org || org.planTier !== 'trial') return null;
+  // Belt-and-suspenders: hide for any non-trial tier. A stale
+  // `trialState.exhausted` flag from before an upgrade should never
+  // be enough to show the modal on a paid org.
+  if (!org) return null;
+  if (org.planTier !== 'trial') return null;
   if (!trialState.exhausted) return null;
 
   return (
