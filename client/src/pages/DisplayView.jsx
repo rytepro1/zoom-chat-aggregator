@@ -114,40 +114,48 @@ function DisplayViewContent({ socket }) {
       }}
       onMouseMove={handleMouseMove}
     >
-      {/* Featured Message - Floating at top */}
+      {/* Featured Message - Floating at top.
+          Background: near-solid dark with a hint of the room color so
+          the chat feed behind it can't bleed through. Border picks up
+          the room color at high opacity to keep the visual association.
+          Body text is pure white for max contrast over the dark fill. */}
       {featuredMessage && (
         <div className="fixed top-0 left-0 right-0 z-50 p-6">
           <div
-            className="max-w-5xl mx-auto p-8 rounded-2xl shadow-2xl backdrop-blur-md border"
+            className="max-w-5xl mx-auto p-8 rounded-2xl shadow-2xl border-2"
             style={{
-              backgroundColor: `${featuredMessage.roomColor || 'var(--accent-color)'}25`,
-              borderColor: `${featuredMessage.roomColor || 'var(--accent-color)'}50`,
-              boxShadow: `0 25px 50px -12px ${featuredMessage.roomColor || 'var(--accent-color)'}33`
+              // Layer the room-color tint over a near-opaque dark base
+              // so the text isn't competing with whatever's scrolling
+              // behind it.
+              backgroundColor: 'rgba(15, 23, 42, 0.96)',
+              backgroundImage: `linear-gradient(135deg, ${featuredMessage.roomColor || 'var(--accent-color)'}22 0%, transparent 60%)`,
+              borderColor: featuredMessage.roomColor || 'var(--accent-color)',
+              boxShadow: `0 25px 50px -12px ${featuredMessage.roomColor || 'var(--accent-color)'}66, 0 0 0 1px rgba(0,0,0,0.4)`,
             }}
           >
             <div className="flex items-start gap-5">
               <div
                 className="flex-shrink-0 w-14 h-14 rounded-full flex items-center justify-center"
                 style={{
-                  backgroundColor: `${featuredMessage.roomColor || 'var(--accent-color)'}40`
+                  backgroundColor: featuredMessage.roomColor || 'var(--accent-color)',
                 }}
               >
                 <span
                   className="text-2xl font-bold"
-                  style={{ color: featuredMessage.roomColor || 'var(--accent-color)' }}
+                  style={{ color: '#ffffff' }}
                 >
                   {featuredMessage.sender?.charAt(0)?.toUpperCase() || '?'}
                 </span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-lg font-medium mb-2" style={{ color: 'var(--text-color)', opacity: 0.7 }}>
+                <p className="text-lg font-semibold mb-2" style={{ color: '#e2e8f0' }}>
                   {featuredMessage.sender}
-                  <span className="mx-2" style={{ opacity: 0.4 }}>•</span>
+                  <span className="mx-2" style={{ color: '#475569' }}>•</span>
                   <span
                     className="text-sm px-2 py-0.5 rounded"
                     style={{
-                      backgroundColor: `${featuredMessage.roomColor || 'var(--accent-color)'}40`,
-                      color: featuredMessage.roomColor || 'var(--accent-color)',
+                      backgroundColor: featuredMessage.roomColor || 'var(--accent-color)',
+                      color: '#ffffff',
                     }}
                   >
                     {featuredMessage.room}
@@ -155,7 +163,7 @@ function DisplayViewContent({ socket }) {
                 </p>
                 <p
                   className="text-3xl font-semibold leading-relaxed break-words"
-                  style={{ color: 'var(--text-color)' }}
+                  style={{ color: '#ffffff' }}
                 >
                   {featuredMessage.content}
                 </p>
