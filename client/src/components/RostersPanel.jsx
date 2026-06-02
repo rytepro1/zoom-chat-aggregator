@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useRosters } from '../contexts/RostersContext';
+import { useMeetings } from '../contexts/MeetingsContext';
 
 const ROOM_COLORS = [
   '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e',
@@ -182,6 +183,7 @@ function RostersPanel() {
                   onDeploy={() => handleDeploy(r.id)}
                   onEdit={() => openEdit(r.id)}
                   onDelete={() => handleDelete(r.id, r.name)}
+                  fetchOne={fetchOne}
                 />
               ))}
             </div>
@@ -275,20 +277,51 @@ function RostersPanel() {
   );
 }
 
-function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete }) {
+function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete, fetchOne }) {
   const scheduled = roster.scheduled_for ? new Date(roster.scheduled_for) : null;
   const scheduledLabel = scheduled
     ? scheduled.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
     : null;
 
+  // Entries are lazy-loaded on first expand. List endpoint only returns
+  // roster metadata so we save the round-trip for collapsed rows.
+  const [expanded, setExpanded] = useState(false);
+  const [entries, setEntries] = useState(null);
+  const [loadingEntries, setLoadingEntries] = useState(false);
+  const [entriesError, setEntriesError] = useState(null);
+
+  const toggleExpanded = async () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (entries) return; // already loaded
+    setLoadingEntries(true);
+    setEntriesError(null);
+    try {
+      const full = await fetchOne(roster.id);
+      setEntries(full?.entries || []);
+    } catch (err) {
+      setEntriesError(err.message);
+    } finally {
+      setLoadingEntries(false);
+    }
+  };
+
   return (
     <div className="p-3 rounded-lg bg-white/5 border border-white/10">
       <div className="flex items-center justify-between mb-2">
-        <div className="min-w-0 flex-1">
-          <div className="font-medium truncate" style={{ color: 'var(--text-color)' }}>
+        <button
+          onClick={toggleExpanded}
+          className="min-w-0 flex-1 text-left"
+          title={expanded ? 'Hide meetings' : 'Show meetings'}
+        >
+          <div className="font-medium truncate flex items-center gap-1.5" style={{ color: 'var(--text-color)' }}>
+            <span className="text-xs opacity-60">{expanded ? '▾' : '▸'}</span>
             {roster.name}
           </div>
-          <div className="text-xs opacity-50">
+          <div className="text-xs opacity-50 ml-4">
             {roster.entry_count} {roster.entry_count === 1 ? 'meeting' : 'meetings'}
             {scheduledLabel && (
               <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-300 text-[10px]">
@@ -296,7 +329,7 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete }) {
               </span>
             )}
           </div>
-        </div>
+        </button>
         <div className="flex gap-1.5 flex-shrink-0">
           <button
             onClick={onDeploy}
@@ -324,6 +357,30 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete }) {
         </div>
       </div>
 
+      {/* Expanded: per-entry list with per-entry Relaunch buttons.
+          Lets the operator re-dispatch a single bot (e.g., one that
+          dropped mid-event) without redeploying the whole roster. */}
+      {expanded && (
+        <div className="mt-3 pt-3 border-t border-white/10">
+          {loadingEntries && <div className="text-xs opacity-50">Loading meetings…</div>}
+          {entriesError && <div className="text-xs text-red-400">{entriesError}</div>}
+          {entries && entries.length === 0 && (
+            <div className="text-xs opacity-50 italic">No meetings in this roster yet — use Edit to add some.</div>
+          )}
+          {entries && entries.length > 0 && (
+            <div className="space-y-1.5">
+              {entries.map((entry) => (
+                <EntryRelaunchRow
+                  key={entry.id}
+                  entry={entry}
+                  scheduledFor={roster.scheduled_for}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {result && (
         <div className="text-xs mt-2 px-2 py-1.5 rounded bg-white/5 border border-white/10">
           {result.error ? (
@@ -344,6 +401,90 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete }) {
             </>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Single-row per-entry dispatcher inside an expanded roster row.
+ * Calls the same /api/meetings/connect endpoint Deploy uses, just
+ * with one entry. Operator hits this when a single bot drops and
+ * they want to re-add only that meeting (vs redeploying the whole
+ * roster which would no-op on still-connected meetings via dedup).
+ */
+function EntryRelaunchRow({ entry, scheduledFor }) {
+  const { connectToMeeting, meetings } = useMeetings();
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(null); // 'ok' | 'err'
+  const [error, setError] = useState('');
+
+  // Is this entry already connected? (Quick lookup against live meetings.)
+  const live = meetings.find(m => m.meetingId === entry.meeting_id || m.id === entry.meeting_id);
+
+  const relaunch = async () => {
+    setBusy(true);
+    setStatus(null);
+    setError('');
+    try {
+      await connectToMeeting({
+        meetingId: entry.meeting_id,
+        passcode: entry.passcode || '',
+        roomName: entry.room_name,
+        roomColor: entry.room_color,
+        botName: entry.bot_name,
+        scheduledFor: scheduledFor || null,
+        meetingUrl: entry.meeting_url || null,
+      });
+      setStatus('ok');
+      setTimeout(() => setStatus(null), 3000);
+    } catch (err) {
+      setStatus('err');
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 p-2 rounded bg-white/5 border border-white/10">
+      <span
+        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+        style={{ backgroundColor: entry.room_color || '#ef4444' }}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium truncate" style={{ color: 'var(--text-color)' }}>
+          {entry.room_name}
+        </div>
+        <div className="text-[10px] opacity-50 truncate">
+          {entry.meeting_id} · {entry.bot_name}
+          {entry.meeting_url && <span className="ml-1 text-amber-400">· registered</span>}
+        </div>
+        {status === 'err' && (
+          <div className="text-[10px] text-red-400 mt-0.5 truncate" title={error}>
+            {error}
+          </div>
+        )}
+        {status === 'ok' && (
+          <div className="text-[10px] text-green-400 mt-0.5">
+            Dispatched ✓
+          </div>
+        )}
+      </div>
+      {live ? (
+        <span className="text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 flex-shrink-0">
+          live
+        </span>
+      ) : (
+        <button
+          onClick={relaunch}
+          disabled={busy}
+          className="text-xs px-2.5 py-1 rounded font-medium hover:opacity-90 disabled:opacity-50 flex-shrink-0"
+          style={{ backgroundColor: 'var(--accent-color)', color: 'white' }}
+          title="Re-dispatch this bot only"
+        >
+          {busy ? '…' : 'Relaunch'}
+        </button>
       )}
     </div>
   );
