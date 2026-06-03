@@ -216,6 +216,29 @@ volume justifies it.
 
 ---
 
+## 🔧 Logged fixes (pending — do as their own separate commit)
+
+Surfaced by the June 2026 backend deep-dive (`docs/backend/`). Logged
+here on purpose; **not yet implemented** — to be done in a dedicated
+commit, separate from the panelist build and the docs commit.
+
+1. **Reseed bot-routing maps on startup.**
+   `src/recall/RecallBotManager.js:154` — `botsByMeeting` /
+   `meetingsByBot` are in-memory only. A Railway redeploy (or any
+   process restart) drops all active-bot tracking while the bots stay
+   live in Zoom, so their inbound chat webhooks get silently dropped
+   ("unknown bot — dropping message"). Fix: on boot, seed the maps from
+   open `bot_usage` rows (`left_at IS NULL`) so routing survives a
+   restart. This is the most likely thing to bite mid-event.
+
+2. **Confirm + enforce `RECALL_WEBHOOK_SECRET`.**
+   `src/routes/webhook.js:173-181` — when the secret is unset,
+   `/webhook/recall/chat` and `/webhook/recall/status` accept
+   unauthenticated POSTs and only log a warning, so anyone could inject
+   chat or manipulate bot state. Fix: verify it's actually set in
+   Railway production, and have the route refuse unsigned requests in
+   production (hard-fail) rather than warn-and-accept.
+
 ## 💡 Future ideas (not committed to)
 
 ### Auto-register bots as Zoom panelists via Zoom API
@@ -236,6 +259,26 @@ Sketch:
 
 Estimate: ~half day. Should be the next build for any customer who
 runs registration-required webinars (which is most of them).
+
+### "Better Tiles" — custom multi-stream presentation surface (uses RTMS)
+A future, self-contained section of the product: a better version of
+Zoom's Tiles — a custom layout/presentation surface rendering live
+participant media. This is the use case that would justify turning on
+**RTMS for real** (real-time audio/video/transcript/**chat** media
+streams; chat is RTMS media type 16). Note: chat capture today does NOT
+use RTMS — it goes through Recall.ai, which works and is cross-org.
+RTMS only becomes worth it for the media/Tiles surface, and it carries
+real prerequisites before it can ship:
+- Zoom **Developer Pack** (paid contract after a 30-day trial)
+- The app must be installed on the **host's** Zoom org (no cross-org)
+- `@zoom/rtms` needs **Node 22+** and only ships `linux-x64` /
+  `darwin-arm64` (verify Railway isn't on ARM)
+- The chat-stream callback name for the Node SDK is **unconfirmed**
+- Our current RTMS scaffolding has known bugs to fix first (wrong
+  handshake-signature format + stale `payload.object` field path —
+  see `docs/backend/zoom.md` Risks).
+Estimate: a multi-week section, not a half-day. Park until the Tiles
+feature is actually scoped.
 
 ### React message list virtualization
 At sustained 400+ msgs/sec the chat feed chugs because all 500
