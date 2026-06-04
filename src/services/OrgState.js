@@ -43,6 +43,7 @@ export class OrgState {
       await sm.init();
       const ma = new MessageAggregator(this.io, { db: this.db, sessionManager: sm, orgId });
       await ma.hydrate();
+      await ma.loadOrgConfig();
       const ai = new AIResponder({
         db: this.db,
         io: this.io,

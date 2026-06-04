@@ -327,6 +327,12 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_enabled             BOOLEA
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_match_threshold     REAL    NOT NULL DEFAULT 0.85;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_cooldown_seconds    INTEGER NOT NULL DEFAULT 75;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_recurring_threshold INTEGER NOT NULL DEFAULT 3;
+
+-- Per-org toggle for the third-party notetaker filter (Otter/Fireflies/…).
+-- Default TRUE = filter on (current behavior). An admin can turn it off
+-- per org in Settings. The NOTETAKER_FILTER_DISABLED env var is a global
+-- hard override on top of this.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS notetaker_filter_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 `;
 
 // One-shot data migration: create the RYTE org and backfill org_id on

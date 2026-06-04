@@ -777,6 +777,49 @@ app.post('/api/rosters/:id/register-panelists', async (req, res) => {
   }
 });
 
+// ---- Org settings (per-org runtime toggles) ----
+
+// Read org settings for the Settings UI. Any signed-in member can read.
+app.get('/api/org/settings', async (req, res) => {
+  try {
+    const db = app.get('db');
+    const { rows } = await db.query(
+      `SELECT notetaker_filter_enabled FROM organizations WHERE id = $1`,
+      [req.org.id]
+    );
+    res.json({ notetakerFilterEnabled: rows[0]?.notetaker_filter_enabled !== false });
+  } catch (err) {
+    console.error('GET /api/org/settings failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update org settings — admin only. Persists to the org row AND live-
+// updates the running MessageAggregator so the change takes effect
+// immediately (no restart). (The NOTETAKER_FILTER_DISABLED env var still
+// hard-overrides globally on top of this.)
+app.patch('/api/org/settings', requireAdmin, async (req, res) => {
+  try {
+    const db = app.get('db');
+    if (typeof req.body?.notetakerFilterEnabled === 'boolean') {
+      await db.query(
+        `UPDATE organizations SET notetaker_filter_enabled = $2 WHERE id = $1`,
+        [req.org.id, req.body.notetakerFilterEnabled]
+      );
+      const entry = orgState.peek(req.org.id);
+      if (entry?.ma) entry.ma.notetakerFilterEnabled = req.body.notetakerFilterEnabled;
+    }
+    const { rows } = await db.query(
+      `SELECT notetaker_filter_enabled FROM organizations WHERE id = $1`,
+      [req.org.id]
+    );
+    res.json({ notetakerFilterEnabled: rows[0]?.notetaker_filter_enabled !== false });
+  } catch (err) {
+    console.error('PATCH /api/org/settings failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Static client ----
 
 if (process.env.NODE_ENV === 'production') {

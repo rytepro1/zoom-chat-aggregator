@@ -252,6 +252,13 @@ function SettingsPanel() {
             </Section>
           )}
 
+          {/* Chat filters — admin-only org behavior. */}
+          {user?.role === 'admin' && (
+            <Section title="Chat Filters">
+              <NotetakerFilterToggle />
+            </Section>
+          )}
+
           {/* Reset */}
           <div className="pt-4 border-t border-white/10">
             <button
@@ -552,6 +559,60 @@ function ZoomIntegrationSection() {
           {msg.text}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Org-level toggle for the notetaker-bot filter. Server-side behavior
+ * (MessageAggregator drops matching chat), so it reads/writes
+ * /api/org/settings rather than the local SettingsContext.
+ */
+function NotetakerFilterToggle() {
+  const [enabled, setEnabled] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/org/settings`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setEnabled(d.notetakerFilterEnabled !== false); })
+      .catch(() => {})
+      .finally(() => setLoaded(true));
+  }, []);
+
+  const toggle = async (next) => {
+    setEnabled(next); // optimistic
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_URL}/api/org/settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notetakerFilterEnabled: next }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setEnabled(data.notetakerFilterEnabled !== false);
+    } catch {
+      setEnabled(!next); // revert on failure
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <ToggleOption
+        label="Hide notetaker bots"
+        value={enabled}
+        onChange={(v) => !busy && loaded && toggle(v)}
+      />
+      <p className="text-[11px]" style={{ color: 'var(--secondary-text-color)' }}>
+        Drops chat from third-party notetakers (Otter, Fireflies, Fathom, …) —
+        both their own messages and the "upgrade to Pro" notices that post under
+        an attendee's name. Doesn't remove the bots from Zoom; just keeps their
+        chatter out of your feed. On for everyone by default.
+      </p>
     </div>
   );
 }

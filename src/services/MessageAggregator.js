@@ -22,6 +22,10 @@ export class MessageAggregator {
     // Optional per-org AI auto-responder, injected by OrgState after
     // construction. When present, inbound chat is also fed to it.
     this.aiResponder = null;
+    // Per-org notetaker-filter toggle (organizations.notetaker_filter_enabled).
+    // Loaded via loadOrgConfig() after construction; live-updated by the
+    // PATCH /api/org/settings handler. Default on.
+    this.notetakerFilterEnabled = true;
     this.messages = [];
     this.rooms = new Map();
     this.maxMessages = 500;
@@ -100,6 +104,27 @@ export class MessageAggregator {
     console.log(`[Aggregator ${this.orgId}] hydrated ${this.messages.length} from ${sessionId}`);
   }
 
+  /**
+   * Load per-org runtime config (currently just the notetaker-filter
+   * toggle). Independent of session state, so callable any time. The
+   * PATCH /api/org/settings handler also live-updates this.notetakerFilterEnabled
+   * directly so a flip takes effect without a restart.
+   */
+  async loadOrgConfig() {
+    if (!this.db || !this.orgId) return;
+    try {
+      const { rows } = await this.db.query(
+        `SELECT notetaker_filter_enabled FROM organizations WHERE id = $1`,
+        [this.orgId]
+      );
+      if (rows[0] && typeof rows[0].notetaker_filter_enabled === 'boolean') {
+        this.notetakerFilterEnabled = rows[0].notetaker_filter_enabled;
+      }
+    } catch (err) {
+      console.error(`[Aggregator ${this.orgId}] loadOrgConfig failed:`, err.message);
+    }
+  }
+
   async addMessage(messageData) {
     // Drop third-party notetaker bots (Otter, Fireflies, …) before they
     // reach the feed/DB/AI. Matches by sender name OR content signature
@@ -107,7 +132,7 @@ export class MessageAggregator {
     // chat only — never our own replies/broadcasts/ai_replies (which
     // carry an explicit type). We can't evict them from Zoom, just keep
     // their chatter out of here.
-    if ((messageData.type || 'chat') === 'chat' &&
+    if ((messageData.type || 'chat') === 'chat' && this.notetakerFilterEnabled &&
         isNotetakerMessage({ sender: messageData.sender, content: messageData.content })) {
       console.log(`[Aggregator ${this.orgId}] filtered notetaker: ${messageData.sender}`);
       return null;
