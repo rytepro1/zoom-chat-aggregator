@@ -225,7 +225,7 @@ function DisplayViewContent({ socket }) {
           zero so a clear queue leaves the screen clean. */}
       {queueCount > 0 && (
         <div
-          className={`fixed bottom-6 left-6 z-50 flex items-center gap-3 rounded-2xl border shadow-2xl backdrop-blur-sm ${queueTier === 'high' ? 'animate-pulse' : ''}`}
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-2xl border shadow-2xl backdrop-blur-sm ${queueTier === 'high' ? 'animate-pulse' : ''}`}
           style={{ ...queueBugStyle, padding: `${0.5 * queueScale}rem ${0.85 * queueScale}rem`, cursor: 'default' }}
           title={`${queueCount} question${queueCount === 1 ? '' : 's'} waiting in the queue`}
         >
@@ -240,7 +240,7 @@ function DisplayViewContent({ socket }) {
 
       {/* Minimal status indicator - only visible on mouse move */}
       <div
-        className={`fixed bottom-6 right-6 flex items-center gap-3 transition-opacity duration-300 ${
+        className={`fixed bottom-6 left-6 flex items-center gap-3 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0'
         }`}
         style={{ cursor: 'default' }}
