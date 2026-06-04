@@ -5,7 +5,9 @@ the app keeps growing. See
 [`docs/CHAT-CAPTURE-ARCHITECTURE.md`](docs/CHAT-CAPTURE-ARCHITECTURE.md)
 for chat-pipeline context and
 [`docs/MONETIZATION-PLAN.md`](docs/MONETIZATION-PLAN.md) for the
-SaaS pricing plan (now mostly shipped — see below).
+SaaS pricing plan (now mostly shipped — see below). For per-subsystem
+engineering reference (Recall, Zoom, Stripe, auth, etc.), start at
+[`docs/backend/README.md`](docs/backend/README.md).
 
 ---
 
@@ -179,8 +181,8 @@ The monetization rollout shipped across these phases:
 - Server auto-resolves shorteners like `joinevent.link` via HEAD
   before passing to Recall.
 - Bot joins as a registered attendee, bypassing Zoom's registration
-  gate. (Promoting to panelist is still a manual Zoom-side step —
-  see Future Ideas for Zoom API automation.)
+  gate. (Promoting to panelist is now automated via the Zoom API —
+  see "Zoom panelist auto-registration" below.)
 
 ### Recall bot reliability defaults (June 2026 hardening)
 - `automatic_leave` timeouts bumped from default 2-sec / 20-min to
@@ -199,6 +201,40 @@ The monetization rollout shipped across these phases:
   (not in moderator chat, not in Zoom rooms).
 - Operator display name stored in localStorage for attribution.
 - Auto-dismiss configurable per-browser in Settings.
+
+### Zoom panelist auto-registration (was ROADMAP #1 — shipped June 2026)
+- Per-org Zoom Server-to-Server OAuth creds, stored encrypted at rest
+  (`org_zoom_credentials`; AES-256-GCM via `secretBox.js`, key
+  `CRED_ENCRYPTION_KEY`). Entered in Settings → Zoom Integration (admin)
+  with a Test-connection check. `ZoomApiClient` mints + caches S2S
+  tokens and manages panelists.
+- Roster webinar entries get a "Webinar — auto-register bot as panelist"
+  checkbox. `POST /api/rosters/:id/register-panelists` adds each as a
+  panelist (`POST /v2/webinars/{id}/panelists`), fetches the `join_url`,
+  and writes it to the entry so Deploy joins the bot AS a panelist.
+- Panelist emails auto-derive from a system base (`PANELIST_EMAIL_BASE`,
+  e.g. `zoomchat@ryteproductions.com`) →
+  `zoomchat+<org>-<room>-<token>@…` (token = hash of the webinar id;
+  globally unique, deterministic). Per-org base + per-entry overrides
+  supported. One S2S app on the customer's Zoom account covers all their
+  webinar-hosting users (admin scope).
+- Full reference: `docs/backend/zoom.md`. Local test harness:
+  `npm run zoom:panelist-test`.
+
+### Moderation panel declutter + presenter queue "bug"
+- Moderation panel reorganized so the queue stack gets the vertical
+  space; the "Note to presenter" composer and "How to moderate" help
+  collapse into one-line toggles.
+- Presenter pop-out shows a broadcast-style queue "bug" (bottom-left):
+  live pending-question count, neutral <5, amber at 5+, pulsing red at
+  10+, hidden at zero — cues the host to catch up.
+
+### Backend reference library
+- `docs/backend/` — grounded reference docs for all 12 backend/frontend
+  systems (Recall, Zoom, Railway, Postgres, Stripe, Resend, Socket.IO,
+  Express, auth, React, build tooling, Mac launcher) + a README index
+  with end-to-end data flows and a consolidated risk list. Start here
+  when working on any subsystem.
 
 ---
 
@@ -240,25 +276,6 @@ commit, separate from the panelist build and the docs commit.
    production (hard-fail) rather than warn-and-accept.
 
 ## 💡 Future ideas (not committed to)
-
-### Auto-register bots as Zoom panelists via Zoom API
-**The biggest pending UX win.** Currently the operator (or host) has
-to manually register the bot via the Zoom web form, copy the
-`joinevent.link` URL out of email, and paste it into our app for
-each meeting. The Zoom REST API supports `POST /v2/webinars/{id}/panelists`
-which would let us register a bot directly and get the tokenized
-join URL back as a JSON response.
-
-Sketch:
-- Settings → "Zoom integration" section
-- Customer creates a Zoom Server-to-Server OAuth app, gives us
-  Account ID + Client ID + Client Secret (one-time)
-- "Auto-register bots" button on the roster editor fills in all
-  `meeting_url` fields with fresh tokenized URLs
-- Customer never touches Zoom's registration UI
-
-Estimate: ~half day. Should be the next build for any customer who
-runs registration-required webinars (which is most of them).
 
 ### "Better Tiles" — custom multi-stream presentation surface (uses RTMS)
 A future, self-contained section of the product: a better version of
