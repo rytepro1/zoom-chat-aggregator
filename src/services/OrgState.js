@@ -1,5 +1,6 @@
 import { MessageAggregator } from './MessageAggregator.js';
 import { SessionManager } from './SessionManager.js';
+import { AIResponder } from './AIResponder.js';
 
 /**
  * Per-org runtime state container. Lazy-creates a SessionManager +
@@ -16,15 +17,19 @@ import { SessionManager } from './SessionManager.js';
  * active orgs) this is fine; we can add LRU eviction when it matters.
  */
 export class OrgState {
-  constructor({ db, io } = {}) {
+  constructor({ db, io, recallBotManager, aiClient } = {}) {
     this.db = db || null;
     this.io = io || null;
-    this.byOrg = new Map(); // orgId -> { sm, ma }
-    this.initializing = new Map(); // orgId -> Promise<{ sm, ma }>
+    // Shared (not per-org) singletons the per-org AIResponder needs:
+    // recallBotManager to send auto-replies, aiClient for classification.
+    this.recallBotManager = recallBotManager || null;
+    this.aiClient = aiClient || null;
+    this.byOrg = new Map(); // orgId -> { sm, ma, ai }
+    this.initializing = new Map(); // orgId -> Promise<{ sm, ma, ai }>
   }
 
   /**
-   * Return `{ sm, ma }` for the given org, lazy-initializing if needed.
+   * Return `{ sm, ma, ai }` for the given org, lazy-initializing if needed.
    * Two concurrent requests for the same org share the in-flight init
    * promise so we don't double-create state.
    */
@@ -38,7 +43,18 @@ export class OrgState {
       await sm.init();
       const ma = new MessageAggregator(this.io, { db: this.db, sessionManager: sm, orgId });
       await ma.hydrate();
-      const entry = { sm, ma };
+      const ai = new AIResponder({
+        db: this.db,
+        io: this.io,
+        orgId,
+        ma,
+        sm,
+        recallBotManager: this.recallBotManager,
+        aiClient: this.aiClient,
+      });
+      await ai.hydrate();
+      ma.aiResponder = ai;
+      const entry = { sm, ma, ai };
       this.byOrg.set(orgId, entry);
       this.initializing.delete(orgId);
       return entry;

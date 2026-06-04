@@ -8,6 +8,7 @@ import RoomFilter from './components/RoomFilter';
 import SettingsPanel from './components/SettingsPanel';
 import MeetingManager from './components/MeetingManager';
 import ModerationPanel from './components/ModerationPanel';
+import AIPanel from './components/AIPanel';
 import SavedPanel from './components/SavedPanel';
 import SessionHeader from './components/SessionHeader';
 import RostersPanel from './components/RostersPanel';
@@ -15,6 +16,7 @@ import AccountMenu from './components/AccountMenu';
 import TrialBanner from './components/TrialBanner';
 import TrialExhaustedModal from './components/TrialExhaustedModal';
 import { useSaved } from './contexts/SavedContext';
+import { useAI } from './contexts/AIContext';
 
 function App() {
   const {
@@ -26,10 +28,11 @@ function App() {
     setSelectedRoom
   } = useSocketContext();
 
-  const [activePanel, setActivePanel] = useState('connect'); // 'connect', 'rosters', 'moderate', 'rooms', 'saved'
+  const [activePanel, setActivePanel] = useState('connect'); // 'connect', 'rosters', 'moderate', 'ai', 'rooms', 'saved'
 
   const { settings, setSettingsPanelOpen } = useSettings();
   const { savedMessages } = useSaved();
+  const { pendingFaqs } = useAI();
 
   return (
     <div
@@ -182,6 +185,25 @@ function App() {
                 Moderate
               </button>
               <button
+                onClick={() => setActivePanel('ai')}
+                className={`flex-1 py-3 px-2 text-xs font-medium transition-colors relative ${
+                  activePanel === 'ai'
+                    ? 'border-b-2 opacity-100'
+                    : 'opacity-60 hover:opacity-80'
+                }`}
+                style={{
+                  borderColor: activePanel === 'ai' ? 'var(--accent-color)' : 'transparent',
+                  color: activePanel === 'ai' ? 'var(--accent-color)' : 'inherit'
+                }}
+              >
+                AI
+                {pendingFaqs.length > 0 && (
+                  <span className="absolute top-1.5 right-1 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-[10px] font-bold text-black flex items-center justify-center">
+                    {pendingFaqs.length}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => setActivePanel('rooms')}
                 className={`flex-1 py-3 px-2 text-xs font-medium transition-colors ${
                   activePanel === 'rooms'
@@ -216,6 +238,7 @@ function App() {
               {activePanel === 'connect' && <MeetingManager />}
               {activePanel === 'rosters' && <RostersPanel />}
               {activePanel === 'moderate' && <ModerationPanel />}
+              {activePanel === 'ai' && <AIPanel />}
               {activePanel === 'rooms' && (
                 <div className="p-4">
                   <RoomFilter

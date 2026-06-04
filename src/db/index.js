@@ -270,6 +270,63 @@ ALTER TABLE org_zoom_credentials ADD COLUMN IF NOT EXISTS panelist_email_base TE
 -- an explicit panelist_email override is set). False = regular meeting,
 -- skipped by register-panelists.
 ALTER TABLE roster_entries ADD COLUMN IF NOT EXISTS register_panelist BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ============================================
+-- AI AUTO-RESPONDER (Phase A) — see docs/backend/ai.md
+-- ============================================
+
+-- Learned or operator-seeded FAQ knowledge base. Session-scoped (one
+-- event run). The AI detects recurring audience questions and creates a
+-- 'pending' row; the moderator supplies the canonical answer (the bot
+-- never invents a factual link), flipping it to 'active' so matching
+-- questions get auto-answered. 'paused' is set by the self-healing layer
+-- when attendees report the answer is wrong/broken. answer is NULL while
+-- pending. Approved answers are posted to the whole room (throttled).
+CREATE TABLE IF NOT EXISTS ai_faqs (
+  id                  TEXT PRIMARY KEY,
+  org_id              TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  session_id          TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  question_label      TEXT NOT NULL,
+  answer              TEXT,
+  status              TEXT NOT NULL DEFAULT 'pending', -- pending|active|paused|dismissed
+  match_count         INTEGER NOT NULL DEFAULT 0,
+  auto_reply_count    INTEGER NOT NULL DEFAULT 0,
+  complaint_count     INTEGER NOT NULL DEFAULT 0,
+  pause_reason        TEXT,
+  created_by_user_id  TEXT REFERENCES users(id) ON DELETE SET NULL, -- NULL = AI-detected
+  approved_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_faqs_session ON ai_faqs(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_ai_faqs_org     ON ai_faqs(org_id, status);
+
+-- Audit trail: every detection, auto-reply, suppression, complaint, and
+-- pause/resume. The basis for the activity log + post-event review, and
+-- proof of exactly what the bot sent and why.
+CREATE TABLE IF NOT EXISTS ai_faq_events (
+  id           TEXT PRIMARY KEY,
+  faq_id       TEXT REFERENCES ai_faqs(id) ON DELETE CASCADE,
+  org_id       TEXT NOT NULL,
+  session_id   TEXT,
+  meeting_id   TEXT,
+  message_id   TEXT,                 -- the inbound message that triggered it
+  action       TEXT NOT NULL,        -- detected|auto_replied|suppressed|complaint|paused|resumed
+  confidence   REAL,
+  inbound_text TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_faq_events_faq ON ai_faq_events(faq_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_faq_events_org ON ai_faq_events(org_id, created_at);
+
+-- Per-org AI auto-responder settings. Off by default — an admin flips
+-- ai_enabled to arm it. Tunables drive matching strictness, the
+-- anti-spam cooldown, and how many distinct askers trigger a "needs your
+-- answer" prompt. Auto-replies are always posted to the whole room.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_enabled             BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_match_threshold     REAL    NOT NULL DEFAULT 0.85;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_cooldown_seconds    INTEGER NOT NULL DEFAULT 75;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS ai_recurring_threshold INTEGER NOT NULL DEFAULT 3;
 `;
 
 // One-shot data migration: create the RYTE org and backfill org_id on

@@ -11,6 +11,7 @@
 | System | Pinned version | Role | Doc |
 |---|---|---|---|
 | **Recall.ai** | API v1, region us-east-1 (raw `fetch`, no SDK) | Meeting-bot infra: joins Zoom, captures chat, sends outbound chat | [./recall.md](./recall.md) |
+| **AI auto-responder** | `@anthropic-ai/sdk ^0.70`, model `claude-haiku-4-5` | Smart Auto-Responder: detect recurring questions → moderator answers → auto-reply + self-heal | [./ai.md](./ai.md) |
 | **Zoom** | REST API v2, S2S OAuth, Event Webhooks, `@zoom/rtms` (mocked) | Upstream chat source; webhook verification + URL-validation today, panelist API planned | [./zoom.md](./zoom.md) |
 | **Railway** | Nixpacks builder, single service + managed Postgres | PaaS host: builds Vite client, runs the Node process, injects env + `DATABASE_URL` | [./railway.md](./railway.md) |
 | **PostgreSQL / pg** | `pg ^8.21` | Durable store for sessions, messages, billing, rosters, bot-usage | [./postgres.md](./postgres.md) |

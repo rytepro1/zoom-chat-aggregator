@@ -64,13 +64,21 @@ export function setupSocketHandlers(io, { db, orgState }) {
       socket.emit('serverError', { error: 'Failed to load workspace' });
       return;
     }
-    const { ma } = entry;
+    const { ma, ai } = entry;
 
     socket.emit('initialState', {
       messages: ma.getRecentMessages(100),
       rooms: ma.getRooms(),
       stats: ma.getStats(),
     });
+
+    // Hydrate the AI panel (settings + current FAQs) so a fresh connect /
+    // reload doesn't lose state. Parallels presenterNotesInitial below.
+    try {
+      if (ai) socket.emit('ai:state', ai.getStateSnapshot());
+    } catch (err) {
+      console.error('[socket] ai:state hydrate failed:', err.message);
+    }
 
     // Push currently-active presenter notes so a fresh connect /
     // page reload doesn't lose them. Failure is logged but doesn't

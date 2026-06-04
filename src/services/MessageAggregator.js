@@ -18,6 +18,9 @@ export class MessageAggregator {
     this.db = db || null;
     this.sessionManager = sessionManager || null;
     this.orgId = orgId || null;
+    // Optional per-org AI auto-responder, injected by OrgState after
+    // construction. When present, inbound chat is also fed to it.
+    this.aiResponder = null;
     this.messages = [];
     this.rooms = new Map();
     this.maxMessages = 500;
@@ -108,14 +111,20 @@ export class MessageAggregator {
       type: messageData.type || 'chat',
       saved: false,
       note: null,
+      // Asker's Zoom participant id (when Recall provides it). Carried
+      // through to the AIResponder so it can DM the asker / dedup per
+      // person. Not persisted — runtime-only.
+      participantId: messageData.participantId || null,
     };
 
-    // Echo dedup: inbound chat matching a recent outgoing?
+    // Echo dedup: inbound chat matching a recent outgoing? Includes
+    // `ai_reply` so the auto-responder's own sends, echoed back by Recall,
+    // don't re-enter the feed (or the AI pipeline).
     if (message.type === 'chat') {
       const cutoffMs = Date.now() - 5000;
       const recent = this.messages.slice(-10);
       const isEcho = recent.some(m =>
-        (m.type === 'reply' || m.type === 'broadcast') &&
+        (m.type === 'reply' || m.type === 'broadcast' || m.type === 'ai_reply') &&
         m.sender === message.sender &&
         m.content === message.content &&
         m.meetingId === message.meetingId &&
@@ -157,6 +166,18 @@ export class MessageAggregator {
         );
       } catch (err) {
         console.error(`[Aggregator ${this.orgId}] DB insert failed:`, err.message);
+      }
+    }
+
+    // Feed inbound attendee chat to the AI auto-responder (set by
+    // OrgState). Fire-and-forget + guarded: the AI layer must never break
+    // or slow the capture path. Only 'chat' (real attendee messages) —
+    // never our own replies/broadcasts/ai_replies.
+    if (message.type === 'chat' && this.aiResponder) {
+      try {
+        this.aiResponder.ingest(message);
+      } catch (err) {
+        console.error(`[Aggregator ${this.orgId}] aiResponder.ingest error:`, err.message);
       }
     }
 

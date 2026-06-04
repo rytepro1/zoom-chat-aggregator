@@ -11,7 +11,9 @@ import authRouter from '../routes/auth.js';
 import billingRouter from '../routes/billing.js';
 import invitationsRouter from '../routes/invitations.js';
 import presenterNotesRouter from '../routes/presenterNotes.js';
+import aiRouter from '../routes/ai.js';
 import { StripeService } from '../services/StripeService.js';
+import { AIClient } from '../services/AIClient.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { RosterManager } from '../services/RosterManager.js';
 import { ZoomCredentialsService } from '../services/ZoomCredentialsService.js';
@@ -54,7 +56,11 @@ const recallBotManager = new RecallBotManager({
   publicWebhookUrl: process.env.PUBLIC_WEBHOOK_URL,
 });
 const useRecall = recallBotManager.isConfigured();
-const orgState = new OrgState({ io });
+// Shared Anthropic client for the AI auto-responder. Inert (feature
+// disabled) when ANTHROPIC_API_KEY is unset. Handed to OrgState so each
+// per-org AIResponder can classify chat + send auto-replies via Recall.
+const aiClient = new AIClient({ apiKey: process.env.ANTHROPIC_API_KEY });
+const orgState = new OrgState({ io, recallBotManager, aiClient });
 // TrialEnforcer is constructed without db here; start() is called from
 // start() once db is initialized.
 const trialEnforcer = new TrialEnforcer({ db: null, io, recallBotManager, orgState });
@@ -70,6 +76,7 @@ app.set('recallBotManager', recallBotManager);
 app.set('orgState', orgState);
 app.set('trialEnforcer', trialEnforcer);
 app.set('stripeService', stripeService);
+app.set('aiClient', aiClient);
 app.set('io', io);
 
 // ---- Middleware ----
@@ -117,6 +124,9 @@ app.get('/api/status', (req, res) => {
       mockMode: rtmsManager.useMockMode,
       activeConnections: rtmsManager.getActiveConnections().length,
     },
+    ai: {
+      configured: aiClient.isConfigured(),
+    },
   });
 });
 
@@ -146,6 +156,10 @@ app.use('/api', requireAuth);
 // Presenter notes — mounted under /api so requireAuth applies above.
 // Any signed-in role can send/dismiss; org isolation via req.org.id.
 app.use('/api/presenter-notes', presenterNotesRouter());
+
+// AI auto-responder — settings + FAQ CRUD. requireAuth applies (above);
+// settings PATCH is admin-gated inside the router.
+app.use('/api/ai', aiRouter());
 
 // Helper to grab the requesting user's org state on demand.
 async function org(req) {

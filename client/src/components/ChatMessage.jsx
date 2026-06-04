@@ -187,8 +187,15 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
   // Outgoing messages (operator-sent replies + broadcasts) get a
   // distinct visual treatment so the operator can easily spot what
   // they sent in the unified feed.
-  const isOutgoing = message.type === 'reply' || message.type === 'broadcast';
-  const outgoingLabel = message.type === 'reply' ? '↩ Reply' : message.type === 'broadcast' ? '📢 Broadcast' : null;
+  const isOutgoing = message.type === 'reply' || message.type === 'broadcast' || message.type === 'ai_reply';
+  const outgoingLabel = message.type === 'reply' ? '↩ Reply'
+    : message.type === 'broadcast' ? '📢 Broadcast'
+    : message.type === 'ai_reply' ? '🤖 Auto'
+    : null;
+  const outgoingTitle = message.type === 'reply' ? 'Sent by an operator as a reply to this room'
+    : message.type === 'broadcast' ? 'Sent by an operator as a broadcast to all rooms'
+    : message.type === 'ai_reply' ? 'Sent automatically by the AI auto-responder'
+    : '';
 
   return (
     <div
@@ -227,10 +234,10 @@ function ChatMessage({ message, showActions = true, onFeature, moderation: moder
             <span
               className="text-xs px-1.5 py-0.5 rounded font-medium"
               style={{
-                backgroundColor: 'var(--accent-color)',
+                backgroundColor: message.type === 'ai_reply' ? '#7c3aed' : 'var(--accent-color)',
                 color: 'white',
               }}
-              title={message.type === 'reply' ? 'Sent by an operator as a reply to this room' : 'Sent by an operator as a broadcast to all rooms'}
+              title={outgoingTitle}
             >
               {outgoingLabel}
             </span>

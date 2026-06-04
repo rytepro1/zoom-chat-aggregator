@@ -236,6 +236,35 @@ The monetization rollout shipped across these phases:
   with end-to-end data flows and a consolidated risk list. Start here
   when working on any subsystem.
 
+### Smart Auto-Responder — AI FAQ co-pilot (Phase A, June 2026)
+First AI/LLM feature. Detects recurring audience questions, asks the
+moderator for the canonical answer (human-in-the-loop — the bot never
+invents a factual link), then auto-replies to matching questions, and
+self-heals (pauses + flags the moderator) when attendees report the
+answer is wrong/broken. Full reference: `docs/backend/ai.md`.
+- Per-org engine `AIResponder` (one per org, created in `OrgState`,
+  hooked into the existing `MessageAggregator.addMessage` chokepoint).
+  Classification via `AIClient` → `claude-haiku-4-5` forced-tool output,
+  prompt-cached, fail-safe (any error = no action).
+- The model only advises; deterministic JS gates every send/pause/create
+  against per-org thresholds + a `(faq, room)` cooldown + per-asker dedup.
+  Reuses the 20/min per-bot limiter + `sent_messages` audit.
+- Reply delivery is **public-throttled** — the answer is posted to the
+  whole room (works in meetings + webinars), with a per-(faq, room)
+  cooldown + per-asker dedup (keyed on the Zoom `participant.id` captured
+  off the inbound webhook) so a popular question isn't answered repeatedly
+  and no one is answered twice.
+- Self-healing: credible negative-feedback complaints pause the FAQ and
+  raise an alert (≥2 complaints, or one at ≥0.9 confidence).
+- Tables `ai_faqs` + `ai_faq_events` + `organizations.ai_*` settings.
+  REST `/api/ai/*`, socket `ai:*`, new "AI" operator tab + 🤖 feed pill.
+  Off by default per org; inert unless `ANTHROPIC_API_KEY` is set.
+- Operator can also **pre-seed** known FAQs before a show.
+- Tests: `test/AIResponder.test.mjs` (`npm test`) — in-memory, no real
+  Anthropic/Recall calls.
+- **Fast-follows (next):** suggested reply drafts + AI moderation triage,
+  reusing the same `AIClient` + AI panel.
+
 ---
 
 ## ⏸️ Parked (intentionally deferred)

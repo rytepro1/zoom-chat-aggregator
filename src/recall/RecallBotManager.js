@@ -84,6 +84,9 @@ function extractChatMessage(payload) {
     return {
       text: root.data.text,
       sender: root.participant?.name ?? null,
+      // Zoom participant id — used by the AI auto-responder to dedup
+      // auto-replies per asker (never answer the same person twice).
+      participantId: root.participant?.id ?? null,
       timestamp: root.timestamp?.absolute ?? null,
     };
   }
@@ -102,6 +105,7 @@ function extractChatMessage(payload) {
       inner.participant?.name ??
       inner.from?.name ??
       null,
+    participantId: inner.participant?.id ?? inner.sender?.id ?? null,
     timestamp:
       inner.timestamp?.absolute ??
       (typeof inner.timestamp === 'string' ? inner.timestamp : null) ??
@@ -464,6 +468,7 @@ export class RecallBotManager {
       room: botInfo.roomName,
       roomColor: botInfo.roomColor,
       meetingId: botInfo.meetingId,
+      participantId: chat.participantId || null,
       timestamp: chat.timestamp || new Date().toISOString(),
       type: 'chat',
     });
