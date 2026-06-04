@@ -26,20 +26,36 @@ function emptyEntry() {
   };
 }
 
+// Mirror of the server's panelistSlug/panelistToken/derivePanelistAlias
+// (src/server/index.js) so the editor preview matches exactly what gets
+// registered. Keep these in sync with the server.
+function pSlug(s, max = 16) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, max);
+}
+function pToken(s) {
+  let h = 0x811c9dc5;
+  const str = String(s || '');
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36).slice(0, 4).padStart(4, '0');
+}
+
 /**
- * Preview the auto-derived panelist alias for a room, mirroring the
- * server's derivePanelistAlias(). base "chatbot@acme.com" + "Zoom 5"
- * → "chatbot+zoom5@acme.com". Returns null if base is missing/invalid.
+ * Preview the auto-derived panelist alias for a room: base + org + room
+ * + webinar-id token → "zoomchat+ugenticai-zoom5-7f3a@ryteproductions.com".
+ * Returns null if base is missing/invalid.
  */
-function aliasPreview(base, roomName, meetingId) {
+function aliasPreview(base, orgSlug, roomName, meetingId) {
   const at = String(base || '').indexOf('@');
   if (at <= 0) return null;
   const local = base.slice(0, at);
   const domain = base.slice(at + 1);
   if (!domain.includes('.')) return null;
-  let slug = String(roomName || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20);
-  if (!slug) slug = String(meetingId || 'room').replace(/[^a-z0-9]+/g, '');
-  return `${local}+${slug}@${domain}`.toLowerCase();
+  const room = pSlug(roomName) || pSlug(meetingId) || 'room';
+  const suffix = [orgSlug, room, pToken(meetingId)].filter(Boolean).join('-');
+  return `${local}+${suffix}@${domain}`.toLowerCase();
 }
 
 /**
@@ -69,11 +85,16 @@ function RostersPanel() {
   // Org's base panelist email (Settings → Zoom Integration), used to
   // preview the auto-derived alias in the entry editor.
   const [panelistEmailBase, setPanelistEmailBase] = useState('');
+  const [orgSlug, setOrgSlug] = useState('');
 
   useEffect(() => {
     fetch(`${API_URL}/api/zoom/credentials`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setPanelistEmailBase(d.effectiveEmailBase || d.panelistEmailBase || ''); })
+      .then((d) => {
+        if (!d) return;
+        setPanelistEmailBase(d.effectiveEmailBase || d.panelistEmailBase || '');
+        setOrgSlug(d.orgSlug || '');
+      })
       .catch(() => {});
   }, []);
 
@@ -270,6 +291,7 @@ function RostersPanel() {
                 entry={entry}
                 canRemove={draftEntries.length > 1}
                 panelistEmailBase={panelistEmailBase}
+                orgSlug={orgSlug}
                 onChange={(patch) => updateEntry(idx, patch)}
                 onRemove={() => removeEntry(idx)}
               />
@@ -569,9 +591,9 @@ function EntryRelaunchRow({ entry, scheduledFor }) {
   );
 }
 
-function EntryEditor({ index, entry, canRemove, panelistEmailBase, onChange, onRemove }) {
+function EntryEditor({ index, entry, canRemove, panelistEmailBase, orgSlug, onChange, onRemove }) {
   const explicit = (entry.panelist_email || '').trim();
-  const preview = aliasPreview(panelistEmailBase, entry.room_name, entry.meeting_id);
+  const preview = aliasPreview(panelistEmailBase, orgSlug, entry.room_name, entry.meeting_id);
   return (
     <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
       <div className="flex items-center justify-between">

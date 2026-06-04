@@ -432,22 +432,41 @@ app.post('/api/broadcast', async (req, res) => {
   }
 });
 
-// Derive a unique panelist alias from an org base email + room, e.g.
-// base "chatbot@acme.com" + room "Zoom 5" → "chatbot+zoom5@acme.com".
-// De-duplicates within a roster via the `used` set (adds a numeric
-// suffix on collision). Returns null if no/invalid base email.
-function derivePanelistAlias(base, roomName, meetingId, used) {
+// Alias building blocks. panelistToken is a tiny FNV-1a hash → 4 base36
+// chars; it is replicated verbatim in client/src/components/RostersPanel.jsx
+// so the editor preview matches what gets registered. Keep them in sync.
+function panelistSlug(s, max = 16) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, max);
+}
+function panelistToken(s) {
+  let h = 0x811c9dc5;
+  const str = String(s || '');
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36).slice(0, 4).padStart(4, '0');
+}
+
+// Derive a unique panelist alias: base "zoomchat@ryte.com" + org
+// "UgenticAI" + room "Zoom 5" + webinar id → "zoomchat+ugenticai-zoom5-7f3a@ryte.com".
+// The token is a deterministic hash of the webinar id, so the alias is
+// globally unique (even across clients sharing the base mailbox) yet
+// stable across re-registrations. De-dupes within a roster via `used`.
+// Returns null if no/invalid base email.
+function derivePanelistAlias(base, orgName, roomName, meetingId, used) {
   const at = String(base || '').indexOf('@');
   if (at <= 0) return null;
   const local = base.slice(0, at);
   const domain = base.slice(at + 1);
   if (!domain.includes('.')) return null;
-  let slug = String(roomName || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20);
-  if (!slug) slug = String(meetingId || 'room').replace(/[^a-z0-9]+/g, '');
-  let candidate = `${local}+${slug}@${domain}`.toLowerCase();
+  const org = panelistSlug(orgName);
+  const room = panelistSlug(roomName) || panelistSlug(meetingId) || 'room';
+  const suffix = [org, room, panelistToken(meetingId)].filter(Boolean).join('-');
+  let candidate = `${local}+${suffix}@${domain}`.toLowerCase();
   let n = 2;
   while (used.has(candidate)) {
-    candidate = `${local}+${slug}${n}@${domain}`.toLowerCase();
+    candidate = `${local}+${suffix}-${n}@${domain}`.toLowerCase();
     n++;
   }
   used.add(candidate);
@@ -620,6 +639,7 @@ app.get('/api/zoom/credentials', async (req, res) => {
       ...status,
       systemEmailBase,
       effectiveEmailBase: status.panelistEmailBase || systemEmailBase,
+      orgSlug: panelistSlug(req.org.name),
     });
   } catch (err) {
     console.error('GET /api/zoom/credentials failed:', err);
@@ -712,7 +732,7 @@ app.post('/api/rosters/:id/register-panelists', async (req, res) => {
       const explicit = entry.panelist_email && String(entry.panelist_email).trim()
         ? String(entry.panelist_email).trim().toLowerCase()
         : null;
-      const email = explicit || derivePanelistAlias(base, entry.room_name, entry.meeting_id, used);
+      const email = explicit || derivePanelistAlias(base, req.org.name, entry.room_name, entry.meeting_id, used);
       const row = { meetingId: entry.meeting_id, roomName: entry.room_name, email };
       if (!email) {
         results.push({ ...row, ok: false, error: 'No panelist email — set a base email in Settings → Zoom Integration, or enter one on this entry.' });
