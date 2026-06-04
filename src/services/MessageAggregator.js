@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { isNotetakerMessage } from './notetakerFilter.js';
 
 /**
  * Aggregates chat messages from one org's meeting rooms into a unified
@@ -100,6 +101,18 @@ export class MessageAggregator {
   }
 
   async addMessage(messageData) {
+    // Drop third-party notetaker bots (Otter, Fireflies, …) before they
+    // reach the feed/DB/AI. Matches by sender name OR content signature
+    // (the upsell notice can post under a real attendee's name). Inbound
+    // chat only — never our own replies/broadcasts/ai_replies (which
+    // carry an explicit type). We can't evict them from Zoom, just keep
+    // their chatter out of here.
+    if ((messageData.type || 'chat') === 'chat' &&
+        isNotetakerMessage({ sender: messageData.sender, content: messageData.content })) {
+      console.log(`[Aggregator ${this.orgId}] filtered notetaker: ${messageData.sender}`);
+      return null;
+    }
+
     const message = {
       id: uuidv4(),
       sender: messageData.sender || 'Unknown',
