@@ -347,6 +347,23 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete, fetc
     }
   };
 
+  // Combined flow: register panelists, then deploy. Per-entry
+  // registration failures don't block deploy (those rooms just deploy
+  // via their existing URL/ID); only a hard error (no creds, etc.) aborts.
+  const handleRegisterAndDeploy = async () => {
+    setRegistering(true);
+    setRegisterResult(null);
+    try {
+      setRegisterResult(await registerPanelists(roster.id));
+    } catch (err) {
+      setRegisterResult({ error: err.message });
+      setRegistering(false);
+      return;
+    }
+    setRegistering(false);
+    onDeploy();
+  };
+
   const scheduled = roster.scheduled_for ? new Date(roster.scheduled_for) : null;
   const scheduledLabel = scheduled
     ? scheduled.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
@@ -401,24 +418,6 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete, fetc
         </button>
         <div className="flex gap-1.5 flex-shrink-0">
           <button
-            onClick={handleRegister}
-            disabled={registering || roster.entry_count === 0}
-            className="text-xs px-2 py-1.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
-            style={{ color: 'var(--text-color)' }}
-            title="Register bot emails as Zoom webinar panelists and capture their join URLs (webinar entries only)"
-          >
-            {registering ? '…' : 'Register'}
-          </button>
-          <button
-            onClick={onDeploy}
-            disabled={deploying || roster.entry_count === 0}
-            className="text-xs px-3 py-1.5 rounded font-medium hover:opacity-90 disabled:opacity-50"
-            style={{ backgroundColor: 'var(--accent-color)', color: 'white' }}
-            title="Connect bots to every meeting in this roster"
-          >
-            {deploying ? '…' : 'Deploy'}
-          </button>
-          <button
             onClick={onEdit}
             className="text-xs px-2 py-1.5 rounded bg-white/10 hover:bg-white/20"
             style={{ color: 'var(--text-color)' }}
@@ -433,6 +432,39 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete, fetc
             ✕
           </button>
         </div>
+      </div>
+
+      {/* Primary actions. "Register & Deploy" is the one-click webinar
+          flow (register panelists → deploy). Deploy / Register remain
+          available for meeting-only rosters, re-deploys, or pre-registering. */}
+      <div className="flex gap-1.5 mb-1">
+        <button
+          onClick={handleRegisterAndDeploy}
+          disabled={registering || deploying || roster.entry_count === 0}
+          className="flex-1 text-xs px-3 py-1.5 rounded font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-1"
+          style={{ backgroundColor: 'var(--accent-color)', color: 'white' }}
+          title="Register webinar panelists, then deploy bots to every meeting in one click"
+        >
+          {registering ? 'Registering…' : deploying ? 'Deploying…' : '⚡ Register & Deploy'}
+        </button>
+        <button
+          onClick={onDeploy}
+          disabled={deploying || registering || roster.entry_count === 0}
+          className="text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+          style={{ color: 'var(--text-color)' }}
+          title="Deploy bots only (skip panelist registration) — for meetings or re-deploys"
+        >
+          {deploying ? '…' : 'Deploy'}
+        </button>
+        <button
+          onClick={handleRegister}
+          disabled={registering || deploying || roster.entry_count === 0}
+          className="text-xs px-2 py-1.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+          style={{ color: 'var(--text-color)' }}
+          title="Register panelists only — capture join URLs without dispatching bots yet"
+        >
+          {registering ? '…' : 'Register'}
+        </button>
       </div>
 
       {/* Expanded: per-entry list with per-entry Relaunch buttons.
