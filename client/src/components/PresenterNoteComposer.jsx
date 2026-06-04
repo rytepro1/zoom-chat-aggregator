@@ -13,7 +13,7 @@ import { usePresenterNotes } from '../contexts/PresenterNotesContext';
 const DISPLAY_NAME_KEY = 'zoomchat.operatorDisplayName';
 const MAX_LEN = 200;
 
-export default function PresenterNoteComposer() {
+export default function PresenterNoteComposer({ hideHeader = false }) {
   const { notes, send, dismiss } = usePresenterNotes();
   const [body, setBody] = useState('');
   const [displayName, setDisplayName] = useState(() => {
@@ -59,15 +59,17 @@ export default function PresenterNoteComposer() {
   const currentNote = notes[0]; // newest first
 
   return (
-    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 mb-4">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-amber-300 flex items-center gap-2">
-          📺 Note to presenter
-        </h3>
-        <span className="text-xs opacity-60">
-          Org-wide · presenter pop-out only
-        </span>
-      </div>
+    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+      {!hideHeader && (
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold text-amber-300 flex items-center gap-2">
+            📺 Note to presenter
+          </h3>
+          <span className="text-xs opacity-60">
+            Org-wide · presenter pop-out only
+          </span>
+        </div>
+      )}
 
       <input
         type="text"

@@ -21,7 +21,17 @@ function DisplayViewContent({ socket }) {
   const hideControlsTimeout = useRef(null);
   const scrollIntervalRef = useRef(null);
   const { settings } = useSettings();
-  const { featuredMessage } = useModeration();
+  const { featuredMessage, queue } = useModeration();
+  const queueCount = queue.length;
+  const queueScale = settings.displayScale ?? 1.5;
+  // Escalate the queue "bug" as the backlog grows so the on-air host
+  // knows when to stop and clear pending questions.
+  const queueTier = queueCount >= 10 ? 'high' : queueCount >= 5 ? 'med' : 'low';
+  const queueBugStyle = {
+    low: { backgroundColor: 'rgba(0,0,0,0.6)', borderColor: 'rgba(255,255,255,0.18)', color: '#fff' },
+    med: { backgroundColor: 'rgba(245,158,11,0.92)', borderColor: '#fcd34d', color: '#1f2937' },
+    high: { backgroundColor: 'rgba(220,38,38,0.92)', borderColor: '#fca5a5', color: '#fff' },
+  }[queueTier];
   const { notes: presenterNotes } = usePresenterNotes();
   const notesHeight = getPresenterNotesHeight(presenterNotes.length);
 
@@ -208,6 +218,25 @@ function DisplayViewContent({ socket }) {
           </div>
         )}
       </div>
+
+      {/* Queue "bug" — broadcast-style corner badge with the live count
+          of pending questions. Always visible (its whole job is to alert
+          the host); escalates amber at 5+, pulsing red at 10+. Hidden at
+          zero so a clear queue leaves the screen clean. */}
+      {queueCount > 0 && (
+        <div
+          className={`fixed bottom-6 left-6 z-50 flex items-center gap-3 rounded-2xl border shadow-2xl backdrop-blur-sm ${queueTier === 'high' ? 'animate-pulse' : ''}`}
+          style={{ ...queueBugStyle, padding: `${0.5 * queueScale}rem ${0.85 * queueScale}rem`, cursor: 'default' }}
+          title={`${queueCount} question${queueCount === 1 ? '' : 's'} waiting in the queue`}
+        >
+          <span className="font-bold leading-none" style={{ fontSize: `${1.4 * queueScale}rem` }}>
+            {queueCount}
+          </span>
+          <span className="uppercase tracking-wide font-medium opacity-90 leading-tight" style={{ fontSize: `${0.5 * queueScale}rem` }}>
+            in<br />queue
+          </span>
+        </div>
+      )}
 
       {/* Minimal status indicator - only visible on mouse move */}
       <div

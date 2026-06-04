@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useModeration } from '../contexts/ModerationContext';
 import PresenterNoteComposer from './PresenterNoteComposer';
 
@@ -12,6 +12,11 @@ function ModerationPanel() {
     featureNext,
     reorderQueue
   } = useModeration();
+
+  // Collapsible footer sections — collapsed by default so the queue
+  // stack (the thing you work during a show) gets the vertical space.
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const moveUp = (index) => {
     if (index > 0) {
@@ -34,11 +39,8 @@ function ModerationPanel() {
         Moderation Queue
       </h2>
 
-      {/* Note to presenter — org-wide, presenter pop-out only */}
-      <PresenterNoteComposer />
-
       {/* Currently Featured */}
-      <div className="mb-4">
+      <div className="mb-3">
         <h3 className="text-sm font-medium mb-2 opacity-70 flex items-center gap-2">
           <svg className="w-4 h-4 text-green-400" fill="currentColor" viewBox="0 0 24 24">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
@@ -183,21 +185,52 @@ function ModerationPanel() {
         )}
       </div>
 
-      {/* Instructions */}
-      <div className="mt-4 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-sm">
-        <div className="flex gap-2">
-          <svg className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <div className="opacity-80">
-            <p className="font-medium text-blue-400">How to moderate:</p>
-            <ul className="mt-1 space-y-1 text-xs">
+      {/* Collapsible footer — kept out of the way so the queue stays
+          visible. Note composer + help expand on demand. */}
+      <div className="mt-3 pt-3 border-t border-white/10 space-y-2 flex-shrink-0">
+        {/* Note to presenter */}
+        <div>
+          <button
+            onClick={() => setNoteOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 transition-colors"
+          >
+            <span className="text-sm font-semibold text-amber-300 flex items-center gap-2">
+              📺 Note to presenter
+            </span>
+            <span className="text-xs opacity-60 flex items-center gap-2">
+              presenter pop-out only
+              <span>{noteOpen ? '▾' : '▸'}</span>
+            </span>
+          </button>
+          {noteOpen && (
+            <div className="mt-2">
+              <PresenterNoteComposer hideHeader />
+            </div>
+          )}
+        </div>
+
+        {/* How to moderate */}
+        <div>
+          <button
+            onClick={() => setHelpOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 transition-colors"
+          >
+            <span className="text-sm font-medium text-blue-400 flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              How to moderate
+            </span>
+            <span className="text-xs opacity-60">{helpOpen ? '▾' : '▸'}</span>
+          </button>
+          {helpOpen && (
+            <ul className="mt-2 px-3 space-y-1 text-xs opacity-80">
               <li>• Click any message to see moderation options</li>
               <li>• <span className="text-yellow-400">★</span> Highlight marks important messages</li>
               <li>• <span className="text-blue-400">☰</span> Queue adds to this list</li>
               <li>• <span className="text-green-400">✓</span> Feature shows on display</li>
             </ul>
-          </div>
+          )}
         </div>
       </div>
     </div>
