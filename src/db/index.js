@@ -238,6 +238,26 @@ CREATE INDEX IF NOT EXISTS idx_presenter_notes_active
 
 ALTER TABLE organizations
   ADD COLUMN IF NOT EXISTS production_note_dismiss_seconds INTEGER DEFAULT 60;
+
+-- Per-org Zoom Server-to-Server OAuth credentials, for auto-registering
+-- bots as webinar panelists (ROADMAP #1). Each customer hosts webinars
+-- on their own Zoom account, so creds are per-org (not env-level). The
+-- client secret is encrypted at rest via src/services/secretBox.js
+-- (AES-256-GCM) — never stored or returned in plaintext.
+CREATE TABLE IF NOT EXISTS org_zoom_credentials (
+  org_id             TEXT PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+  account_id         TEXT NOT NULL,
+  client_id          TEXT NOT NULL,
+  client_secret_enc  TEXT NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Per-entry panelist email. When set on a (webinar) roster entry, the
+-- register-panelists action adds this address as a Zoom panelist and
+-- stores the returned join_url back into meeting_url. Blank = skip
+-- (regular meeting, or an attendee registration URL pasted manually).
+ALTER TABLE roster_entries ADD COLUMN IF NOT EXISTS panelist_email TEXT;
 `;
 
 // One-shot data migration: create the RYTE org and backfill org_id on

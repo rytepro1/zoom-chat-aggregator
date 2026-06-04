@@ -19,6 +19,7 @@ function emptyEntry() {
     room_name: '',
     room_color: ROOM_COLORS[0],
     bot_name: lastBotName,
+    panelist_email: '',
   };
 }
 
@@ -278,6 +279,22 @@ function RostersPanel() {
 }
 
 function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete, fetchOne }) {
+  const { registerPanelists } = useRosters();
+  const [registering, setRegistering] = useState(false);
+  const [registerResult, setRegisterResult] = useState(null);
+
+  const handleRegister = async () => {
+    setRegistering(true);
+    setRegisterResult(null);
+    try {
+      setRegisterResult(await registerPanelists(roster.id));
+    } catch (err) {
+      setRegisterResult({ error: err.message });
+    } finally {
+      setRegistering(false);
+    }
+  };
+
   const scheduled = roster.scheduled_for ? new Date(roster.scheduled_for) : null;
   const scheduledLabel = scheduled
     ? scheduled.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
@@ -332,6 +349,15 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete, fetc
         </button>
         <div className="flex gap-1.5 flex-shrink-0">
           <button
+            onClick={handleRegister}
+            disabled={registering || roster.entry_count === 0}
+            className="text-xs px-2 py-1.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-50"
+            style={{ color: 'var(--text-color)' }}
+            title="Register bot emails as Zoom webinar panelists and capture their join URLs (webinar entries only)"
+          >
+            {registering ? '…' : 'Register'}
+          </button>
+          <button
             onClick={onDeploy}
             disabled={deploying || roster.entry_count === 0}
             className="text-xs px-3 py-1.5 rounded font-medium hover:opacity-90 disabled:opacity-50"
@@ -377,6 +403,29 @@ function RosterRow({ roster, deploying, result, onDeploy, onEdit, onDelete, fetc
                 />
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {registerResult && (
+        <div className="text-xs mt-2 px-2 py-1.5 rounded bg-white/5 border border-white/10">
+          {registerResult.error ? (
+            <span className="text-red-400">Register failed: {registerResult.error}</span>
+          ) : (
+            <>
+              <div style={{ color: 'var(--text-color)' }}>
+                Registered {registerResult.registered} of {registerResult.total} panelist(s)
+                {registerResult.failed > 0 ? `, ${registerResult.failed} failed` : ''}
+                {registerResult.skipped > 0 ? ` · ${registerResult.skipped} skipped (no email)` : ''}.
+              </div>
+              {registerResult.failed > 0 && (
+                <ul className="mt-1 opacity-70 list-disc list-inside space-y-0.5">
+                  {registerResult.results.filter(r => !r.ok).map(r => (
+                    <li key={r.meetingId}>{r.roomName}: {r.error}</li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </div>
       )}
@@ -531,7 +580,16 @@ function EntryEditor({ index, entry, canRemove, onChange, onRemove }) {
         placeholder="Registration URL (only if Zoom registration required)"
         className="w-full px-2 py-1.5 text-xs rounded bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none font-mono"
         style={{ color: 'var(--text-color)' }}
-        title="For meetings that require registration: paste the unique join URL Zoom emails after registering the bot as an attendee (contains ?tk=...)"
+        title="For meetings that require registration: paste the unique join URL Zoom emails after registering the bot as an attendee (contains ?tk=...). Auto-filled when you use Register panelists."
+      />
+      <input
+        type="email"
+        value={entry.panelist_email || ''}
+        onChange={(e) => onChange({ panelist_email: e.target.value })}
+        placeholder="Bot panelist email (webinars only)"
+        className="w-full px-2 py-1.5 text-xs rounded bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none"
+        style={{ color: 'var(--text-color)' }}
+        title="Webinars only: the bot is auto-registered as a panelist on this email when you click Register panelists (use a unique alias like you+zoom1@gmail.com). Leave blank for regular meetings."
       />
       <input
         type="text"

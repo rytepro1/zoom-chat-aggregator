@@ -48,7 +48,7 @@ export class RosterManager {
     if (rosterRes.rows.length === 0) return null;
     const roster = rosterRes.rows[0];
     const entriesRes = await this.db.query(
-      `SELECT id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, display_order
+      `SELECT id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, panelist_email, display_order
          FROM roster_entries
         WHERE roster_id = $1
         ORDER BY display_order ASC, id ASC`,
@@ -136,8 +136,8 @@ export class RosterManager {
       const e = entries[i];
       await this.db.query(
         `INSERT INTO roster_entries
-           (id, roster_id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, display_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (id, roster_id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, panelist_email, display_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           randomUUID(),
           rosterId,
@@ -147,10 +147,24 @@ export class RosterManager {
           e.room_color || '#ef4444',
           String(e.bot_name).trim(),
           (e.meeting_url && String(e.meeting_url).trim()) || null,
+          (e.panelist_email && String(e.panelist_email).trim().toLowerCase()) || null,
           typeof e.display_order === 'number' ? e.display_order : i,
         ]
       );
     }
+  }
+
+  /**
+   * Set a single entry's meeting_url (the registered join URL). Used by
+   * the panelist auto-registration flow after it gets a join_url back
+   * from Zoom, so a subsequent Deploy dispatches the bot through it.
+   */
+  async updateEntryMeetingUrl(entryId, meetingUrl) {
+    if (!this.db) throw new Error('Persistence is not configured');
+    await this.db.query(
+      `UPDATE roster_entries SET meeting_url = $2 WHERE id = $1`,
+      [entryId, (meetingUrl && String(meetingUrl).trim()) || null]
+    );
   }
 }
 

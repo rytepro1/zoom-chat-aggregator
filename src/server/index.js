@@ -14,12 +14,13 @@ import presenterNotesRouter from '../routes/presenterNotes.js';
 import { StripeService } from '../services/StripeService.js';
 import { setupSocketHandlers } from './socketHandler.js';
 import { RosterManager } from '../services/RosterManager.js';
+import { ZoomCredentialsService } from '../services/ZoomCredentialsService.js';
 import { OrgState } from '../services/OrgState.js';
 import { TrialEnforcer } from '../services/TrialEnforcer.js';
 import { RTMSManager } from '../rtms/RTMSManager.js';
 import { RecallBotManager } from '../recall/RecallBotManager.js';
 import { initDatabase } from '../db/index.js';
-import { attachUser, requireAuth } from '../auth/middleware.js';
+import { attachUser, requireAuth, requireAdmin } from '../auth/middleware.js';
 
 dotenv.config();
 
@@ -45,6 +46,7 @@ const io = new Server(httpServer, {
 //   - rtmsManager (legacy fallback; kept alive for the unused Zoom webhook path)
 //   - orgState (lazy per-org MessageAggregator + SessionManager)
 const rosterManager = new RosterManager();
+const zoomCreds = new ZoomCredentialsService();
 const rtmsManager = new RTMSManager();
 const recallBotManager = new RecallBotManager({
   apiKey: process.env.RECALL_API_KEY,
@@ -62,6 +64,7 @@ const stripeService = new StripeService({
 });
 
 app.set('rosterManager', rosterManager);
+app.set('zoomCreds', zoomCreds);
 app.set('rtmsManager', rtmsManager);
 app.set('recallBotManager', recallBotManager);
 app.set('orgState', orgState);
@@ -580,6 +583,112 @@ app.post('/api/rosters/:id/deploy', async (req, res) => {
   }
 });
 
+// ---- Zoom integration (per-org S2S creds → webinar panelist auto-registration) ----
+
+// Status for the Settings UI. Never returns the client secret. Any
+// signed-in org member can read whether Zoom is connected.
+app.get('/api/zoom/credentials', async (req, res) => {
+  try {
+    res.json(await zoomCreds.getStatus(req.org.id));
+  } catch (err) {
+    console.error('GET /api/zoom/credentials failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save / update creds — admin only. clientSecret may be omitted to keep
+// the stored one (the UI never reads it back).
+app.put('/api/zoom/credentials', requireAdmin, async (req, res) => {
+  const { accountId, clientId, clientSecret } = req.body || {};
+  try {
+    res.json(await zoomCreds.save(req.org.id, { accountId, clientId, clientSecret }));
+  } catch (err) {
+    console.error('PUT /api/zoom/credentials failed:', err);
+    res.status(/required|missing|CRED_ENCRYPTION/i.test(err.message) ? 400 : 500)
+       .json({ error: err.message });
+  }
+});
+
+app.delete('/api/zoom/credentials', requireAdmin, async (req, res) => {
+  try {
+    await zoomCreds.remove(req.org.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/zoom/credentials failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Verify saved creds against Zoom. Mints a token (proves account/client
+// creds) and, if a webinarId is supplied, lists its panelists (proves
+// the scopes + Webinar add-on). Returns ok:false with a plain-English
+// message rather than an error status so the UI can render it directly.
+app.post('/api/zoom/credentials/test', requireAdmin, async (req, res) => {
+  try {
+    const client = await zoomCreds.clientForOrg(req.org.id);
+    if (!client) {
+      return res.json({ ok: false, error: 'No Zoom credentials saved yet — save them first, then test.' });
+    }
+    const webinarId = req.body?.webinarId ? String(req.body.webinarId).replace(/[\s-]/g, '') : null;
+    const result = await client.verifyAccess(webinarId);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+// Register every webinar entry's panelist email as a Zoom panelist, and
+// store the returned join_url back on the entry's meeting_url so a
+// subsequent Deploy joins the bot AS a panelist. Idempotent per entry.
+app.post('/api/rosters/:id/register-panelists', async (req, res) => {
+  if (!rosterManager.isAvailable()) {
+    return res.status(503).json({ error: 'Roster storage requires the database.' });
+  }
+  try {
+    const roster = await rosterManager.get(req.org.id, req.params.id);
+    if (!roster) return res.status(404).json({ error: 'Roster not found' });
+
+    const client = await zoomCreds.clientForOrg(req.org.id);
+    if (!client) {
+      return res.status(400).json({ error: 'Connect your Zoom account in Settings → Zoom Integration first.' });
+    }
+
+    const targets = roster.entries.filter((e) => e.panelist_email && String(e.panelist_email).trim());
+    if (targets.length === 0) {
+      return res.status(400).json({
+        error: 'No roster entries have a panelist email set. Add a bot email to your webinar entries first.',
+      });
+    }
+
+    // Sequential on purpose: webinar management APIs have stricter rate
+    // limits than meeting APIs, and a roster is only a handful of rooms.
+    const results = [];
+    for (const entry of targets) {
+      try {
+        const { join_url, added } = await client.ensurePanelistJoinUrl(entry.meeting_id, {
+          name: entry.bot_name,
+          email: entry.panelist_email,
+        });
+        await rosterManager.updateEntryMeetingUrl(entry.id, join_url);
+        results.push({ meetingId: entry.meeting_id, roomName: entry.room_name, email: entry.panelist_email, ok: true, added });
+      } catch (err) {
+        results.push({ meetingId: entry.meeting_id, roomName: entry.room_name, email: entry.panelist_email, ok: false, error: err.message });
+      }
+    }
+
+    res.json({
+      total: targets.length,
+      registered: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+      skipped: roster.entries.length - targets.length,
+      results,
+    });
+  } catch (err) {
+    console.error(`POST /api/rosters/${req.params.id}/register-panelists failed:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Static client ----
 
 if (process.env.NODE_ENV === 'production') {
@@ -596,6 +705,7 @@ async function start() {
   app.set('db', db);
   orgState.db = db;
   rosterManager.db = db;
+  zoomCreds.db = db;
   recallBotManager.db = db;
   recallBotManager.orgState = orgState;
   trialEnforcer.db = db;

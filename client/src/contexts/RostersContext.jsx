@@ -90,6 +90,20 @@ export function RostersProvider({ children }) {
     return data;
   }, []);
 
+  // Register each webinar entry's panelist email as a Zoom panelist and
+  // capture the join URLs. Refresh so the entries show as registered.
+  const registerPanelists = useCallback(async (id) => {
+    const res = await fetch(`${API_URL}/api/rosters/${id}/register-panelists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    await refresh();
+    return data;
+  }, [refresh]);
+
   return (
     <RostersContext.Provider value={{
       rosters,
@@ -100,6 +114,7 @@ export function RostersProvider({ children }) {
       updateRoster,
       deleteRoster,
       deployRoster,
+      registerPanelists,
     }}>
       {children}
     </RostersContext.Provider>
