@@ -404,6 +404,7 @@ function ZoomIntegrationSection() {
   const [accountId, setAccountId] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
+  const [emailBase, setEmailBase] = useState('');
   const [busy, setBusy] = useState(false);
   const [testWebinarId, setTestWebinarId] = useState('');
   const [msg, setMsg] = useState(null); // { kind: 'ok'|'err', text }
@@ -418,6 +419,7 @@ function ZoomIntegrationSection() {
         setAccountId(data.accountId || '');
         setClientId(data.clientId || '');
       }
+      setEmailBase(data.panelistEmailBase || '');
     } catch { /* ignore */ }
   };
 
@@ -427,7 +429,7 @@ function ZoomIntegrationSection() {
     setBusy(true);
     setMsg(null);
     try {
-      const body = { accountId, clientId };
+      const body = { accountId, clientId, panelistEmailBase: emailBase.trim() };
       if (clientSecret.trim()) body.clientSecret = clientSecret.trim();
       const res = await fetch(`${API_URL}/api/zoom/credentials`, {
         method: 'PUT',
@@ -519,6 +521,23 @@ function ZoomIntegrationSection() {
         >
           Test connection
         </button>
+      </div>
+
+      <div className="pt-1 border-t border-white/10">
+        <TextInput
+          label="Bot panelist email (base)"
+          value={emailBase}
+          onChange={setEmailBase}
+          placeholder="e.g. chatbot@yourdomain.com"
+        />
+        <p className="text-[11px] mt-1" style={{ color: 'var(--secondary-text-color)' }}>
+          Optional override. Leave blank to use the shared default
+          {status?.systemEmailBase ? (
+            <span className="font-mono"> ({status.systemEmailBase})</span>
+          ) : ''}. The app auto-creates a unique alias per webinar
+          (e.g. <span className="font-mono">+zoom5</span>) when you tick "auto-register"
+          on a roster entry — no per-room typing. Set this only to use your own domain. Saved with Save above.
+        </p>
       </div>
 
       <TextInput

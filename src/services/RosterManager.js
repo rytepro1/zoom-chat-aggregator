@@ -48,7 +48,7 @@ export class RosterManager {
     if (rosterRes.rows.length === 0) return null;
     const roster = rosterRes.rows[0];
     const entriesRes = await this.db.query(
-      `SELECT id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, panelist_email, display_order
+      `SELECT id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, panelist_email, register_panelist, display_order
          FROM roster_entries
         WHERE roster_id = $1
         ORDER BY display_order ASC, id ASC`,
@@ -136,8 +136,8 @@ export class RosterManager {
       const e = entries[i];
       await this.db.query(
         `INSERT INTO roster_entries
-           (id, roster_id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, panelist_email, display_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+           (id, roster_id, meeting_id, passcode, room_name, room_color, bot_name, meeting_url, panelist_email, register_panelist, display_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           randomUUID(),
           rosterId,
@@ -148,6 +148,7 @@ export class RosterManager {
           String(e.bot_name).trim(),
           (e.meeting_url && String(e.meeting_url).trim()) || null,
           (e.panelist_email && String(e.panelist_email).trim().toLowerCase()) || null,
+          e.register_panelist === true,
           typeof e.display_order === 'number' ? e.display_order : i,
         ]
       );
@@ -155,15 +156,23 @@ export class RosterManager {
   }
 
   /**
-   * Set a single entry's meeting_url (the registered join URL). Used by
-   * the panelist auto-registration flow after it gets a join_url back
-   * from Zoom, so a subsequent Deploy dispatches the bot through it.
+   * Record the result of registering an entry as a panelist: stores the
+   * returned join URL in meeting_url (so Deploy joins the bot as a
+   * panelist) and the resolved panelist email (which may be an
+   * auto-derived alias) for auditability.
    */
-  async updateEntryMeetingUrl(entryId, meetingUrl) {
+  async updateEntryRegistration(entryId, meetingUrl, panelistEmail) {
     if (!this.db) throw new Error('Persistence is not configured');
     await this.db.query(
-      `UPDATE roster_entries SET meeting_url = $2 WHERE id = $1`,
-      [entryId, (meetingUrl && String(meetingUrl).trim()) || null]
+      `UPDATE roster_entries
+          SET meeting_url    = $2,
+              panelist_email = COALESCE($3, panelist_email)
+        WHERE id = $1`,
+      [
+        entryId,
+        (meetingUrl && String(meetingUrl).trim()) || null,
+        (panelistEmail && String(panelistEmail).trim().toLowerCase()) || null,
+      ]
     );
   }
 }

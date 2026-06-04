@@ -432,6 +432,28 @@ app.post('/api/broadcast', async (req, res) => {
   }
 });
 
+// Derive a unique panelist alias from an org base email + room, e.g.
+// base "chatbot@acme.com" + room "Zoom 5" → "chatbot+zoom5@acme.com".
+// De-duplicates within a roster via the `used` set (adds a numeric
+// suffix on collision). Returns null if no/invalid base email.
+function derivePanelistAlias(base, roomName, meetingId, used) {
+  const at = String(base || '').indexOf('@');
+  if (at <= 0) return null;
+  const local = base.slice(0, at);
+  const domain = base.slice(at + 1);
+  if (!domain.includes('.')) return null;
+  let slug = String(roomName || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20);
+  if (!slug) slug = String(meetingId || 'room').replace(/[^a-z0-9]+/g, '');
+  let candidate = `${local}+${slug}@${domain}`.toLowerCase();
+  let n = 2;
+  while (used.has(candidate)) {
+    candidate = `${local}+${slug}${n}@${domain}`.toLowerCase();
+    n++;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
 // ---- Rosters ----
 
 app.get('/api/rosters', async (req, res) => {
@@ -589,7 +611,16 @@ app.post('/api/rosters/:id/deploy', async (req, res) => {
 // signed-in org member can read whether Zoom is connected.
 app.get('/api/zoom/credentials', async (req, res) => {
   try {
-    res.json(await zoomCreds.getStatus(req.org.id));
+    const status = await zoomCreds.getStatus(req.org.id);
+    // System-wide default base (e.g. zoomchat@ryteproductions.com) is used
+    // for alias derivation when an org hasn't set its own base. effective
+    // is what the UI previews + what registration will actually use.
+    const systemEmailBase = process.env.PANELIST_EMAIL_BASE || null;
+    res.json({
+      ...status,
+      systemEmailBase,
+      effectiveEmailBase: status.panelistEmailBase || systemEmailBase,
+    });
   } catch (err) {
     console.error('GET /api/zoom/credentials failed:', err);
     res.status(500).json({ error: err.message });
@@ -653,26 +684,49 @@ app.post('/api/rosters/:id/register-panelists', async (req, res) => {
       return res.status(400).json({ error: 'Connect your Zoom account in Settings → Zoom Integration first.' });
     }
 
-    const targets = roster.entries.filter((e) => e.panelist_email && String(e.panelist_email).trim());
+    // An entry is in scope if the operator opted it in (register_panelist)
+    // or set an explicit email (back-compat). Meetings (neither) are skipped.
+    const targets = roster.entries.filter(
+      (e) => e.register_panelist || (e.panelist_email && String(e.panelist_email).trim())
+    );
     if (targets.length === 0) {
       return res.status(400).json({
-        error: 'No roster entries have a panelist email set. Add a bot email to your webinar entries first.',
+        error: 'No webinar entries to register. Tick "auto-register bot as panelist" on your webinar entries (or set an explicit email).',
       });
     }
+
+    const status = await zoomCreds.getStatus(req.org.id);
+    // Org override first, then the system-wide default base.
+    const base = status?.panelistEmailBase || process.env.PANELIST_EMAIL_BASE || null;
+    // Seed the de-dupe set with any explicit emails already in use.
+    const used = new Set(
+      targets
+        .filter((e) => e.panelist_email && String(e.panelist_email).trim())
+        .map((e) => String(e.panelist_email).trim().toLowerCase())
+    );
 
     // Sequential on purpose: webinar management APIs have stricter rate
     // limits than meeting APIs, and a roster is only a handful of rooms.
     const results = [];
     for (const entry of targets) {
+      const explicit = entry.panelist_email && String(entry.panelist_email).trim()
+        ? String(entry.panelist_email).trim().toLowerCase()
+        : null;
+      const email = explicit || derivePanelistAlias(base, entry.room_name, entry.meeting_id, used);
+      const row = { meetingId: entry.meeting_id, roomName: entry.room_name, email };
+      if (!email) {
+        results.push({ ...row, ok: false, error: 'No panelist email — set a base email in Settings → Zoom Integration, or enter one on this entry.' });
+        continue;
+      }
       try {
         const { join_url, added } = await client.ensurePanelistJoinUrl(entry.meeting_id, {
           name: entry.bot_name,
-          email: entry.panelist_email,
+          email,
         });
-        await rosterManager.updateEntryMeetingUrl(entry.id, join_url);
-        results.push({ meetingId: entry.meeting_id, roomName: entry.room_name, email: entry.panelist_email, ok: true, added });
+        await rosterManager.updateEntryRegistration(entry.id, join_url, email);
+        results.push({ ...row, ok: true, added });
       } catch (err) {
-        results.push({ meetingId: entry.meeting_id, roomName: entry.room_name, email: entry.panelist_email, ok: false, error: err.message });
+        results.push({ ...row, ok: false, error: err.message });
       }
     }
 

@@ -22,17 +22,18 @@ export class ZoomCredentialsService {
   async getStatus(orgId) {
     if (!this.db) return { configured: false };
     const { rows } = await this.db.query(
-      `SELECT account_id, client_id, updated_at
+      `SELECT account_id, client_id, panelist_email_base, updated_at
          FROM org_zoom_credentials WHERE org_id = $1`,
       [orgId]
     );
-    if (rows.length === 0) return { configured: false };
+    if (rows.length === 0) return { configured: false, panelistEmailBase: null };
     const r = rows[0];
     return {
       configured: true,
       accountId: r.account_id,
       clientId: r.client_id,
       hasSecret: true,
+      panelistEmailBase: r.panelist_email_base || null,
       updatedAt: r.updated_at,
     };
   }
@@ -60,7 +61,7 @@ export class ZoomCredentialsService {
    * admin can correct the account_id/client_id without re-entering the
    * secret (which the UI never reads back).
    */
-  async save(orgId, { accountId, clientId, clientSecret }) {
+  async save(orgId, { accountId, clientId, clientSecret, panelistEmailBase }) {
     if (!this.db) throw new Error('Persistence is not configured');
     if (!isEncryptionConfigured()) {
       throw new Error(
@@ -73,7 +74,7 @@ export class ZoomCredentialsService {
     if (!acct || !cid) throw new Error('accountId and clientId are required');
 
     const existing = await this.db.query(
-      `SELECT client_secret_enc FROM org_zoom_credentials WHERE org_id = $1`,
+      `SELECT client_secret_enc, panelist_email_base FROM org_zoom_credentials WHERE org_id = $1`,
       [orgId]
     );
     let secretEnc;
@@ -85,15 +86,29 @@ export class ZoomCredentialsService {
       throw new Error('clientSecret is required');
     }
 
+    // Base email: undefined → keep existing; otherwise set (validating
+    // shape) or clear when blank.
+    let base;
+    if (panelistEmailBase === undefined) {
+      base = existing.rows[0]?.panelist_email_base ?? null;
+    } else {
+      const trimmed = String(panelistEmailBase || '').trim();
+      if (trimmed && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmed)) {
+        throw new Error('Panelist email base must be a valid email address (e.g. chatbot@yourdomain.com).');
+      }
+      base = trimmed || null;
+    }
+
     await this.db.query(
-      `INSERT INTO org_zoom_credentials (org_id, account_id, client_id, client_secret_enc, updated_at)
-       VALUES ($1, $2, $3, $4, NOW())
+      `INSERT INTO org_zoom_credentials (org_id, account_id, client_id, client_secret_enc, panelist_email_base, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
        ON CONFLICT (org_id) DO UPDATE
-         SET account_id        = EXCLUDED.account_id,
-             client_id         = EXCLUDED.client_id,
-             client_secret_enc = EXCLUDED.client_secret_enc,
-             updated_at        = NOW()`,
-      [orgId, acct, cid, secretEnc]
+         SET account_id          = EXCLUDED.account_id,
+             client_id           = EXCLUDED.client_id,
+             client_secret_enc   = EXCLUDED.client_secret_enc,
+             panelist_email_base = EXCLUDED.panelist_email_base,
+             updated_at          = NOW()`,
+      [orgId, acct, cid, secretEnc, base]
     );
     return this.getStatus(orgId);
   }

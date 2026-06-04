@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRosters } from '../contexts/RostersContext';
 import { useMeetings } from '../contexts/MeetingsContext';
+
+const API_URL = import.meta.env.DEV ? 'http://localhost:3001' : window.location.origin;
 
 const ROOM_COLORS = [
   '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e',
@@ -20,7 +22,24 @@ function emptyEntry() {
     room_color: ROOM_COLORS[0],
     bot_name: lastBotName,
     panelist_email: '',
+    register_panelist: false,
   };
+}
+
+/**
+ * Preview the auto-derived panelist alias for a room, mirroring the
+ * server's derivePanelistAlias(). base "chatbot@acme.com" + "Zoom 5"
+ * → "chatbot+zoom5@acme.com". Returns null if base is missing/invalid.
+ */
+function aliasPreview(base, roomName, meetingId) {
+  const at = String(base || '').indexOf('@');
+  if (at <= 0) return null;
+  const local = base.slice(0, at);
+  const domain = base.slice(at + 1);
+  if (!domain.includes('.')) return null;
+  let slug = String(roomName || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20);
+  if (!slug) slug = String(meetingId || 'room').replace(/[^a-z0-9]+/g, '');
+  return `${local}+${slug}@${domain}`.toLowerCase();
 }
 
 /**
@@ -47,6 +66,16 @@ function RostersPanel() {
   const [error, setError] = useState('');
   const [deployingId, setDeployingId] = useState(null);
   const [deployResult, setDeployResult] = useState(null); // { rosterId, total, succeeded, failed, results }
+  // Org's base panelist email (Settings → Zoom Integration), used to
+  // preview the auto-derived alias in the entry editor.
+  const [panelistEmailBase, setPanelistEmailBase] = useState('');
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/zoom/credentials`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setPanelistEmailBase(d.effectiveEmailBase || d.panelistEmailBase || ''); })
+      .catch(() => {});
+  }, []);
 
   const openNew = () => {
     setEditingId(null);
@@ -240,6 +269,7 @@ function RostersPanel() {
                 index={idx}
                 entry={entry}
                 canRemove={draftEntries.length > 1}
+                panelistEmailBase={panelistEmailBase}
                 onChange={(patch) => updateEntry(idx, patch)}
                 onRemove={() => removeEntry(idx)}
               />
@@ -539,7 +569,9 @@ function EntryRelaunchRow({ entry, scheduledFor }) {
   );
 }
 
-function EntryEditor({ index, entry, canRemove, onChange, onRemove }) {
+function EntryEditor({ index, entry, canRemove, panelistEmailBase, onChange, onRemove }) {
+  const explicit = (entry.panelist_email || '').trim();
+  const preview = aliasPreview(panelistEmailBase, entry.room_name, entry.meeting_id);
   return (
     <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
       <div className="flex items-center justify-between">
@@ -582,15 +614,34 @@ function EntryEditor({ index, entry, canRemove, onChange, onRemove }) {
         style={{ color: 'var(--text-color)' }}
         title="For meetings that require registration: paste the unique join URL Zoom emails after registering the bot as an attendee (contains ?tk=...). Auto-filled when you use Register panelists."
       />
-      <input
-        type="email"
-        value={entry.panelist_email || ''}
-        onChange={(e) => onChange({ panelist_email: e.target.value })}
-        placeholder="Bot panelist email (webinars only)"
-        className="w-full px-2 py-1.5 text-xs rounded bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none"
-        style={{ color: 'var(--text-color)' }}
-        title="Webinars only: the bot is auto-registered as a panelist on this email when you click Register panelists (use a unique alias like you+zoom1@gmail.com). Leave blank for regular meetings."
-      />
+      <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--text-color)' }}>
+        <input
+          type="checkbox"
+          checked={!!entry.register_panelist}
+          onChange={(e) => onChange({ register_panelist: e.target.checked })}
+        />
+        Webinar — auto-register bot as panelist
+      </label>
+      {entry.register_panelist && (
+        <div className="pl-5 space-y-1">
+          <input
+            type="email"
+            value={entry.panelist_email || ''}
+            onChange={(e) => onChange({ panelist_email: e.target.value })}
+            placeholder={preview ? `auto: ${preview}` : 'panelist email (or set a base in Settings)'}
+            className="w-full px-2 py-1.5 text-xs rounded bg-white/10 border border-white/20 focus:border-white/40 focus:outline-none"
+            style={{ color: 'var(--text-color)' }}
+            title="Leave blank to auto-derive an alias from your Settings base email. Fill in to override with a specific address."
+          />
+          <p className="text-[10px] opacity-60">
+            {explicit
+              ? `Will register: ${explicit}`
+              : preview
+                ? `Will auto-register: ${preview}`
+                : 'Set a base email in Settings → Zoom Integration, or type one here.'}
+          </p>
+        </div>
+      )}
       <input
         type="text"
         value={entry.room_name}

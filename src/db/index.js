@@ -258,6 +258,18 @@ CREATE TABLE IF NOT EXISTS org_zoom_credentials (
 -- stores the returned join_url back into meeting_url. Blank = skip
 -- (regular meeting, or an attendee registration URL pasted manually).
 ALTER TABLE roster_entries ADD COLUMN IF NOT EXISTS panelist_email TEXT;
+
+-- Org-level base email for auto-aliasing panelist registrations. Set
+-- once (e.g. chatbot@customer.com); the register-panelists action
+-- derives a unique +alias per webinar entry (chatbot+room@customer.com)
+-- so operators don't type an address per room.
+ALTER TABLE org_zoom_credentials ADD COLUMN IF NOT EXISTS panelist_email_base TEXT;
+
+-- Per-entry opt-in: when true, the entry is a webinar and the bot is
+-- auto-registered as a panelist (email derived from the org base unless
+-- an explicit panelist_email override is set). False = regular meeting,
+-- skipped by register-panelists.
+ALTER TABLE roster_entries ADD COLUMN IF NOT EXISTS register_panelist BOOLEAN NOT NULL DEFAULT FALSE;
 `;
 
 // One-shot data migration: create the RYTE org and backfill org_id on
