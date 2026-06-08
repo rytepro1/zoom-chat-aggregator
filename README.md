@@ -2,6 +2,12 @@
 
 Aggregates chat messages from multiple Zoom meeting rooms into a single unified feed.
 
+## 📖 Documentation
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — master architecture & spec. Start here to understand the whole system, or to incorporate it into another build.
+- **[docs/backend/README.md](docs/backend/README.md)** — per-system reference library (Recall, Zoom, Stripe, auth, AI, …) with exact API surfaces and a ranked risk register.
+- **[ROADMAP.md](ROADMAP.md)** — what's shipped, parked, and pending.
+
 ## Quick Start
 
 ### Option 1: Double-click (easiest)
